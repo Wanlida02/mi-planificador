@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mi Planificador</title>
+<meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#18191c" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Planificador">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="nav">
+    <button class="btn icon" id="prev" aria-label="Anterior">‹</button>
+    <button class="btn" id="today">Hoy</button>
+    <button class="btn icon" id="next" aria-label="Siguiente">›</button>
+    <h1 id="range-label"></h1>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="week" role="tab">Semana</button>
+    <button class="tab" data-tab="backlog" role="tab">Pendientes <span class="count" id="pending-count"></span></button>
+  </nav>
+  <div class="actions">
+    <button class="btn" id="sync-btn" title="Sincronizar con Google"><span class="dot" id="sync-dot"></span><span id="sync-label">Google</span></button>
+    <button class="btn icon" id="settings-btn" aria-label="Ajustes">⚙︎</button>
+  </div>
+</header>
+
+<main>
+  <section id="view-week" class="view active">
+    <div class="week-wrap">
+      <div class="cal">
+        <div class="cal-head" id="cal-head"></div>
+        <div class="cal-allday" id="cal-allday"></div>
+        <div class="cal-scroll" id="cal-scroll">
+          <div class="cal-grid" id="cal-grid"></div>
+        </div>
+      </div>
+      <aside class="side" id="side">
+        <div class="side-head">
+          <h2>Por programar</h2>
+          <button class="btn small" id="side-add">+ Tarea</button>
+        </div>
+        <p class="hint">Arrastra una tarea al calendario.</p>
+        <div id="side-list" class="side-list"></div>
+      </aside>
+    </div>
+    <div class="legend">
+      <span><i class="sw trabajo"></i>Trabajo</span>
+      <span><i class="sw familia"></i>Luna / familia</span>
+      <span><i class="sw personal"></i>Personal</span>
+      <span><i class="sw task"></i>Tarea pendiente</span>
+      <span><i class="sw done"></i>Tarea hecha</span>
+    </div>
+  </section>
+
+  <section id="view-backlog" class="view">
+    <div class="backlog-bar">
+      <form id="quick-add" class="quick-add">
+        <input id="quick-title" placeholder="Nueva tarea… (Enter)" autocomplete="off">
+        <select id="quick-prio" aria-label="Prioridad"><option value="">Sin clasificar</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option></select>
+        <button class="btn primary">Añadir</button>
+      </form>
+      <div class="filters">
+        <select id="filter-cat" aria-label="Categoría"></select>
+        <label class="chk"><input type="checkbox" id="filter-scheduled"> Ver programadas</label>
+        <label class="chk"><input type="checkbox" id="filter-done"> Ver hechas</label>
+        <button class="btn" id="gtasks-btn">Importar de Google Tasks</button>
+      </div>
+    </div>
+    <div class="kanban" id="kanban"></div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog id="modal"><form method="dialog" id="modal-form"></form></dialog>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

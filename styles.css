@@ -111,6 +111,14 @@ main { flex: 1; min-height: 0; display: flex; }
 .ev.short .t { -webkit-line-clamp: 1; }
 .ev.short { padding-top: 1px; }
 .ev.dragging { opacity: .35; }
+.ev.conflict { outline: 2px solid var(--now); outline-offset: -1px; }
+.ev.conflict::after { content: "⚠︎"; position: absolute; top: 1px; right: 3px; font-size: 11px; color: var(--now); }
+.btn.warn { background: var(--festivo-bg); color: var(--festivo-ink); border-color: transparent; font-weight: 600; }
+.btn[hidden] { display: none; }
+.conflict-row { display: grid; grid-template-columns: 78px 1fr; gap: 4px 10px; padding: 10px; border-radius: 8px; background: var(--surface-2); border-left: 3px solid var(--now); }
+.conflict-row .cr-date { font-weight: 600; font-size: 13px; }
+.conflict-row .cr-body { font-size: 13px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.conflict-row .cr-actions { grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; }
 .ev.ghost { opacity: .9; box-shadow: var(--shadow); z-index: 20; pointer-events: none; }
 .sel-box { position: absolute; left: 2px; right: 2px; background: color-mix(in srgb, var(--task-bd) 25%, transparent); border: 1px dashed var(--task-bd); border-radius: 6px; z-index: 3; pointer-events: none; font-size: 11px; padding: 2px 4px; color: var(--task-ink); }
 .float-card { position: fixed; z-index: 1000; pointer-events: none; padding: 6px 10px; border-radius: 8px; background: var(--task-bg); color: var(--task-ink); border-left: 3px solid var(--task-bd); box-shadow: var(--shadow); font-size: 13px; font-weight: 600; max-width: 220px; }

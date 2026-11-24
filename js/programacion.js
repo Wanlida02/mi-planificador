@@ -19,6 +19,13 @@ function sheetRange(ws) {
   return { s, e };
 }
 const val = (ws, r, c) => { const cell = ws[addr(r, c)]; return cell ? cell.v : undefined; };
+// "Tachado" = relleno con trama (rayas diagonales, cuadrícula…) o fuente tachada → cancelado
+export function isCancelled(cell) {
+  const s = cell && cell.s;
+  if (!s) return false;
+  if (s.patternType && !['solid', 'none'].includes(s.patternType)) return true;
+  return !!(s.font && s.font.strike);
+}
 const clean = (v) => String(v ?? '').replace(/ /g, ' ').trim();
 
 export function hasInitials(text, initials) {
@@ -37,6 +44,7 @@ export function parseProgramacion(wb, opts = {}) {
   const tripHours = opts.tripHours || ['07:00', '17:00'];
   const dayHours = opts.dayHours || ['07:00', '15:00'];
   const raw = []; // {date, label, detail, spanId}
+  const cancelled = [];
   const festivos = [];
   const years = [];
 
@@ -90,6 +98,7 @@ export function parseProgramacion(wb, opts = {}) {
             continue;
           }
           if (!hasInitials(text, initials)) continue;
+          if (isCancelled(ws[addr(r, c)])) { cancelled.push({ date: ymd(year, b.month, days[0]), days: days.length, title: text.replace(/\s+/g, ' ') }); continue; }
           const lines = text.split(/\n+/).map((s) => s.trim()).filter(Boolean);
           const label = lines[0];
           const detail = lines.slice(1).join(' ');
@@ -128,5 +137,5 @@ export function parseProgramacion(wb, opts = {}) {
     events.push({ id: `f-${f.date}`, kind: 'festivo', date: f.date, allDay: true, title: f.title });
   }
   events.sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
-  return { events, years };
+  return { events, years, cancelled };
 }

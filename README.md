@@ -6,6 +6,9 @@ Calendario semanal interactivo para planificar tareas encima de:
   - viaje de varios días (celda combinada o mismo destino en días seguidos) → **07:00–17:00** cada día
   - jornada de un día → **07:00–15:00**
   - los festivos de la hoja aparecen arriba, como eventos de todo el día
+  - las celdas **tachadas** (relleno con rayas diagonales o trama) se consideran **canceladas** y se ignoran
+  - **actualización diaria** automática si pegas el enlace de iCloud Drive al Excel
+- **Avisos de solapes**: si un día de trabajo coincide con una cita (médico, pilates…), con una tarea programada o con otro trabajo, aparece el botón ⚠︎ arriba, el bloque se marca en rojo y llega una notificación (cuando la app se abre o se actualiza)
 - **Calendarios de iCloud**: “Familia” (Luna) en **rosa pastel** y “Calendar” (personal) en lila.
 - **Tus tareas**: **azul** si están pendientes y **verde** si están hechas. Se pueden arrastrar (entre días o dentro del mismo día), alargar o acortar tirando del borde inferior y editar con doble clic (en el móvil, doble toque).
 - **Pestaña Pendientes**: tablero por prioridad (Alta / Media / Baja / Sin clasificar). Arrastra las tarjetas para clasificarlas y pulsa **Programar** (o **⚡ Próximo hueco libre**) para llevarlas al calendario.
@@ -25,6 +28,8 @@ En el iPhone: Safari → Compartir → **Añadir a pantalla de inicio**, para us
 
 ### 2. Cargar la programación anual
 ⚙︎ Ajustes → **Programación anual** → elige `Programación Anual 2026.xlsx` desde iCloud Drive.
+**Actualización diaria**: en el iPhone, app Archivos → mantén pulsado el Excel → **Compartir** → arriba elige **Colaborar** → *Opciones de compartir*: **Cualquiera con el enlace** y **Solo ver** → **Copiar enlace**. Pégalo en ⚙︎ Ajustes → *Enlace de iCloud Drive al Excel* (necesita el proxy del paso 3). Si sustituyes el archivo por uno nuevo, el enlace cambia: vuelve a pegarlo.
+
 Cuando llegue la de 2027, cárgala igual: se sustituyen los años que traiga el archivo y se conservan los demás.
 Si el Excel cambia, vuelve a cargarlo.
 
@@ -34,7 +39,7 @@ Si el Excel cambia, vuelve a cargarlo.
 3. En ⚙︎ Ajustes → *Calendarios de iCloud* → **+ Añadir calendario**. Pega cada enlace y elige la categoría: *Luna/Familia* o *Personal*.
 
 > Por seguridad, el navegador no deja que una web lea directamente los calendarios de iCloud (CORS).
-> Hace falta un pequeño **proxy** gratuito en Cloudflare, que solo acepta direcciones de `icloud.com`:
+> Hace falta un pequeño **proxy** gratuito en Cloudflare, que solo acepta direcciones de iCloud (sirve también para descargar el Excel a diario):
 >
 > 1. Crea una cuenta gratuita en <https://dash.cloudflare.com> → **Workers & Pages** → **Create** → **Create Worker**.
 > 2. Ponle un nombre (p. ej. `ics-proxy`) → **Deploy** → **Edit code**. Pega el contenido de [`worker/ics-proxy.js`](worker/ics-proxy.js) → **Deploy**.

@@ -127,11 +127,11 @@ function renderBlock(it) {
   if (e <= s) style.display = 'none';
   const time = `${min2hm(it.s % 1440)}–${min2hm(Math.min(it.e, 1440) % 1440 || 0).replace(/^00:00$/, '24:00')}`;
   if (it.type !== 'task') {
-    return el('div', { class: `ev ${it.type}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, ondblclick: () => infoModal(it) },
+    return el('div', { class: `ev ${it.type}${conflictIds.has(it.ref?.id) ? ' conflict' : ''}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, ondblclick: () => infoModal(it) },
       el('div', { class: 't', text: it.title }), el('div', { class: 's', text: [time, it.sub].filter(Boolean).join(' · ') }));
   }
   const t = it.task;
-  const blk = el('div', { class: `ev task${t.done ? ' done' : ''}${h < 34 ? ' short' : ''}`, style, dataset: { id: t.id }, title: `${t.title}\n${time} (${fmtDur(t.duration)})\nDoble clic para editar · arrastra para mover` },
+  const blk = el('div', { class: `ev task${t.done ? ' done' : ''}${h < 34 ? ' short' : ''}${conflictIds.has(t.id) ? ' conflict' : ''}`, style, dataset: { id: t.id }, title: `${t.title}\n${time} (${fmtDur(t.duration)})\nDoble clic para editar · arrastra para mover` },
     el('div', { class: 'row' },
       el('button', { type: 'button', class: 'ck', 'aria-label': t.done ? 'Marcar pendiente' : 'Marcar hecha', text: t.done ? '✓' : '', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleDone(t); } }),
       el('div', { class: 't', text: t.title || '(sin título)' })),
@@ -186,7 +186,102 @@ function renderFilters() {
   sel.value = v;
 }
 
+// ======================================================================
+// Solapes del trabajo con otras cosas
+// ======================================================================
+const DISMISS_KEY = 'cfs.conflicts.dismissed', SEEN_KEY = 'cfs.conflicts.seen';
+const readSet = (k) => { try { return new Set(JSON.parse(localStorage.getItem(k)) || []); } catch { return new Set(); } };
+const writeSet = (k, set) => { try { localStorage.setItem(k, JSON.stringify([...set].slice(-500))); } catch {} };
+let conflicts = [], conflictIds = new Set();
+
+function computeConflicts() {
+  const from = new Date(); from.setHours(0, 0, 0, 0);
+  const today = toYMD(from);
+  const work = state.work.events.filter((w) => w.kind === 'trabajo' && w.date >= today);
+  if (!work.length) return [];
+  const to = addDays(parseYMD(work.reduce((m, w) => (w.date > m ? w.date : m), today)), 1);
+  const fe = feedEvents(from, to).filter((f) => !f.allDay);
+  const tasks = liveTasks().filter((t) => isScheduled(t) && !t.done && t.date >= today);
+  const at = (date, hm) => { const d = parseYMD(date); d.setMinutes(hm2min(hm)); return d; };
+  const out = [];
+  const wk = (w) => ({ id: w.id, title: w.title, detail: w.detail, start: w.start, end: w.end });
+  work.forEach((w, i) => {
+    const ws = at(w.date, w.start), we = at(w.date, w.end);
+    for (const f of fe) if (f.start < we && f.end > ws) out.push({ key: `${w.id}|${f.id}`, date: w.date, kind: 'cita', work: wk(w), other: { id: f.id, type: f.category, title: f.title, start: f.start, end: f.end } });
+    for (const t of tasks) {
+      if (t.date !== w.date) continue;
+      const ts = at(t.date, t.start), te = new Date(ts.getTime() + (t.duration || 60) * 60000);
+      if (ts < we && te > ws) out.push({ key: `${w.id}|${t.id}`, date: w.date, kind: 'tarea', work: wk(w), other: { id: t.id, type: 'task', title: t.title, start: ts, end: te, task: t } });
+    }
+    for (const w2 of work.slice(i + 1)) {
+      if (w2.date !== w.date || w2.title === w.title) continue;
+      if (at(w2.date, w2.start) < we && at(w2.date, w2.end) > ws) out.push({ key: `${w.id}|${w2.id}`, date: w.date, kind: 'trabajo', work: wk(w), other: { id: w2.id, type: 'trabajo', title: `${w2.title} ${w2.detail || ''}`.trim(), start: at(w2.date, w2.start), end: at(w2.date, w2.end) } });
+    }
+  });
+  const dismissed = readSet(DISMISS_KEY);
+  return out.filter((c) => !dismissed.has(c.key)).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+let notifyT;
+function updateConflicts() {
+  conflicts = computeConflicts();
+  conflictIds = new Set(conflicts.flatMap((c) => [c.work.id, c.other.id]));
+  const btn = $('#conflict-btn');
+  btn.hidden = !conflicts.length;
+  $('#conflict-count').textContent = conflicts.length;
+  // avisar de los nuevos (solo citas y trabajo; las tareas las mueves tú)
+  clearTimeout(notifyT);
+  notifyT = setTimeout(() => {
+    const seen = readSet(SEEN_KEY);
+    const fresh = conflicts.filter((c) => c.kind !== 'tarea' && !seen.has(c.key));
+    conflicts.forEach((c) => seen.add(c.key)); writeSet(SEEN_KEY, seen);
+    if (!fresh.length) return;
+    const c = fresh[0];
+    const msg = fresh.length === 1
+      ? `${fmtDay(c.date)}: ${c.work.title} (${c.work.start}–${c.work.end}) choca con “${c.other.title}”`
+      : `${fresh.length} solapes nuevos del trabajo con otras cosas. El primero: ${fmtDay(c.date)}, “${c.other.title}”`;
+    toast('⚠︎ ' + msg, 7000);
+    systemNotify('Solape con el trabajo', msg);
+  }, 400);
+}
+
+async function systemNotify(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg) await reg.showNotification(title, { body, icon: 'icon-512.png', badge: 'icon-180.png', tag: 'conflictos' });
+    else new Notification(title, { body, icon: 'icon-512.png' });
+  } catch {}
+}
+
+const hmOf = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+function conflictsModal() {
+  const dismissed = readSet(DISMISS_KEY);
+  const rows = conflicts.map((c) => {
+    const label = { cita: c.other.type === 'familia' ? 'Luna / familia' : 'Personal', tarea: 'Tarea', trabajo: 'Otro trabajo' }[c.kind];
+    const row = el('div', { class: `conflict-row k-${c.other.type}` },
+      el('div', { class: 'cr-date', text: fmtDay(c.date) }),
+      el('div', { class: 'cr-body' },
+        el('div', {}, el('b', { text: `${c.work.title}` }), ` ${c.work.detail || ''} · ${c.work.start}–${c.work.end}`),
+        el('div', {}, '↔ ', el('b', { text: c.other.title }), ` · ${hmOf(c.other.start)}–${hmOf(c.other.end)} `, el('span', { class: 'tag', text: label }))),
+      el('div', { class: 'cr-actions' },
+        el('button', { type: 'button', class: 'btn small', text: 'Ver', onclick: () => { closeModal(); switchTab('week'); goTo(parseYMD(c.date)); } }),
+        c.kind === 'tarea' ? el('button', { type: 'button', class: 'btn small', text: '⚡ Mover', title: 'Mover la tarea al próximo hueco libre', onclick: () => {
+          const slot = findSlot(c.other.task.duration || 60, c.other.task.id);
+          if (!slot) return toast('No hay huecos libres');
+          upsertTask({ id: c.other.task.id, ...slot }); toast(`Movida a ${fmtDay(slot.date)} ${slot.start}`); conflictsModal();
+        } }) : null,
+        el('button', { type: 'button', class: 'btn small', text: 'Ignorar', title: 'No volver a avisar de este solape', onclick: () => { dismissed.add(c.key); writeSet(DISMISS_KEY, dismissed); updateConflicts(); renderWeek(); conflicts.length ? conflictsModal() : closeModal(); } })));
+    return row;
+  });
+  openModal(`⚠︎ Solapes con el trabajo (${conflicts.length})`, [
+    el('div', { class: 'muted', text: 'Días de tu programación (FS) que coinciden con citas de tus calendarios, tareas programadas u otro trabajo.' }),
+    ...(rows.length ? rows : [el('div', { class: 'empty', text: 'Sin solapes 🎉' })]),
+  ], [el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal })]);
+}
+
 function render() {
+  updateConflicts();
   renderWeek();
   renderSide();
   if (tab === 'backlog') renderKanban();
@@ -513,8 +608,8 @@ function settingsModal() {
     workStatus.textContent = 'Leyendo…';
     try {
       updateSettings({ initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value });
-      const n = await importExcel(f);
-      workStatus.textContent = `✓ ${n.work} días de trabajo y ${n.fest} festivos (${n.years.join(', ')}) cargados de “${f.name}”.`;
+      const n = await importExcel(await f.arrayBuffer(), f.name);
+      workStatus.textContent = excelMsg(n, f.name);
     } catch (e) { workStatus.textContent = '⚠︎ ' + e.message; }
   });
 
@@ -535,6 +630,14 @@ function settingsModal() {
   }));
   drawFeeds();
   const proxy = el('input', { value: s.proxy, placeholder: 'https://ics-proxy.tu-usuario.workers.dev' });
+  const excelLink = el('input', { value: s.excelLink || '', placeholder: 'https://www.icloud.com/iclouddrive/…#Programacion_Anual_2026' });
+  const linkStatus = el('div', { class: 'muted', text: s.excelLink ? `Actualización diaria activa. Última comprobación: ${lastExcelCheck() ? new Date(lastExcelCheck()).toLocaleString('es-ES') : 'nunca'}.` : 'Sin enlace: la programación solo cambia cuando cargas el archivo a mano.' });
+  const linkBtn = el('button', { type: 'button', class: 'btn small', text: '↻ Actualizar ahora desde el enlace', onclick: async () => {
+    updateSettings({ excelLink: excelLink.value.trim(), proxy: proxy.value.trim() });
+    linkStatus.textContent = 'Descargando…';
+    try { const n = await refreshExcel(true); linkStatus.textContent = n ? excelMsg(n, 'iCloud Drive') : 'Falta el enlace o el proxy.'; workStatus.textContent = linkStatus.textContent; }
+    catch (e) { linkStatus.textContent = '⚠︎ ' + e.message; }
+  } });
 
   const clientId = el('input', { value: getClientId(), placeholder: 'xxxx.apps.googleusercontent.com' });
   const gState = el('div', { class: 'muted', text: G.isSignedIn() ? '✓ Conectado a Google (sincronización activa).' : 'No conectado.' });
@@ -553,6 +656,7 @@ function settingsModal() {
     el('div', { class: 'section', style: { borderTop: 0, paddingTop: 0 } }, el('h3', { text: '📄 Programación anual (Excel)' }),
       el('div', { class: 'muted', text: 'Elige “Programación Anual 2026.xlsx” desde iCloud Drive. Se marcan los días con tus iniciales: viaje de varios días y jornada de un día. Al cargar otro año se conservan los anteriores.' }),
       fileInput, workStatus,
+      field('Enlace de iCloud Drive al Excel (actualización diaria automática)', excelLink), linkBtn, linkStatus,
       el('div', { class: 'row2' }, field('Mis iniciales', initials), el('span')),
       el('div', { class: 'row2' }, field('Viaje: desde', tS), field('Viaje: hasta', tE)),
       el('div', { class: 'row2' }, field('Día suelto: desde', dS), field('Día suelto: hasta', dE))),
@@ -560,7 +664,13 @@ function settingsModal() {
       el('div', { class: 'muted' }, 'En el iPhone: Calendario → Calendarios → (i) junto a “Familia” → activa “Calendario público” → Compartir enlace. Repite con “Calendar”. Pega aquí los enlaces.'),
       feedList,
       el('button', { type: 'button', class: 'btn small', text: '+ Añadir calendario', onclick: () => { feeds.push({ id: uid(), name: '', url: '', category: feeds.length ? 'personal' : 'familia' }); drawFeeds(); } }),
-      field('Proxy para iCloud (ver README)', proxy)),
+      field('Proxy para iCloud (sirve para calendarios y Excel; ver README)', proxy)),
+    el('div', { class: 'section' }, el('h3', { text: '🔔 Avisos de solapes' }),
+      el('div', { class: 'muted', text: 'Al abrir la app (y cada hora con ella abierta) se revisa la programación y tus calendarios. Si un día de trabajo choca con una cita, aparece un aviso y se marca en rojo.' }),
+      'Notification' in window ? el('button', { type: 'button', class: 'btn small', text: Notification.permission === 'granted' ? '✓ Notificaciones activadas' : 'Activar notificaciones del sistema', disabled: Notification.permission === 'granted', onclick: async (e) => {
+        const r = await Notification.requestPermission(); e.target.textContent = r === 'granted' ? '✓ Notificaciones activadas' : 'Permiso denegado (actívalo en Ajustes del sistema)';
+        if (r === 'granted') systemNotify('Planificador', 'Te avisaré aquí cuando el trabajo se solape con otra cosa.');
+      } }) : el('div', { class: 'muted', text: 'En iPhone, las notificaciones solo funcionan con la app añadida a la pantalla de inicio.' })),
     el('div', { class: 'section' }, el('h3', { text: '🔄 Google (Tasks + sincronización)' }),
       field('Client ID de OAuth (ver README)', clientId), gState,
       el('div', { class: 'seg' },
@@ -583,7 +693,7 @@ function settingsModal() {
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
-      proxy: proxy.value.trim(),
+      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
     });
@@ -595,15 +705,37 @@ function settingsModal() {
   });
 }
 
-async function importExcel(file) {
+const EXCEL_KEY = 'cfs.excelCheck';
+const lastExcelCheck = () => { try { return +localStorage.getItem(EXCEL_KEY) || 0; } catch { return 0; } };
+const excelMsg = (n, name) => `✓ ${n.work} días de trabajo, ${n.fest} festivos (${n.years.join(', ')})${n.cancelled ? ` · ${n.cancelled} cancelados (tachados) ignorados` : ''} — “${name}”, ${new Date().toLocaleString('es-ES')}.`;
+
+/** Descarga el Excel desde el enlace de iCloud Drive (vía proxy). Una vez al día salvo force. */
+async function refreshExcel(force = false) {
+  const { excelLink, proxy } = state.settings;
+  if (!excelLink || !proxy) return null;
+  if (!force && Date.now() - lastExcelCheck() < 20 * 3600 * 1000) return null;
+  const url = `${proxy.replace(/[?&]$/, '')}${proxy.includes('?') ? '&' : '?'}share=${encodeURIComponent(excelLink)}`;
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`No se pudo descargar el Excel: ${(await r.text()).slice(0, 160)}`);
+  const name = decodeURIComponent((excelLink.split('#')[1] || 'Programación Anual')).replace(/_/g, ' ');
+  const n = await importExcel(await r.arrayBuffer(), name);
+  try { localStorage.setItem(EXCEL_KEY, String(Date.now())); } catch {}
+  return n;
+}
+async function autoRefreshExcel() {
+  try { const n = await refreshExcel(false); if (n) toast('Programación actualizada desde iCloud Drive'); }
+  catch (e) { toast('⚠︎ ' + e.message, 5000); }
+}
+
+async function importExcel(buf, fileName) {
   if (!window.XLSX) throw new Error('No se ha cargado la librería de Excel (¿sin conexión?)');
-  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: false });
+  const wb = XLSX.read(buf, { type: 'array', cellStyles: true });
   const s = state.settings;
   const r = parseProgramacion(wb, { initials: s.initials, tripHours: [s.tripStart, s.tripEnd], dayHours: [s.dayWorkStart, s.dayWorkEnd] });
   if (!r.years.length) throw new Error('No encuentro ninguna hoja “Programación AAAA” en el archivo');
   const keep = state.work.events.filter((e) => !r.years.includes(+e.date.slice(0, 4)));
-  setWork({ events: [...keep, ...r.events], fileName: file.name, importedAt: Date.now() });
-  return { work: r.events.filter((e) => e.kind === 'trabajo').length, fest: r.events.filter((e) => e.kind === 'festivo').length, years: r.years };
+  setWork({ events: [...keep, ...r.events], fileName, importedAt: Date.now() });
+  return { work: r.events.filter((e) => e.kind === 'trabajo').length, fest: r.events.filter((e) => e.kind === 'festivo').length, years: r.years, cancelled: r.cancelled.length };
 }
 
 // ---------- Google Tasks ----------
@@ -703,6 +835,7 @@ $('#next').onclick = () => step(1);
 $('#today').onclick = () => { goTo(new Date()); scrollToMorning(); };
 document.querySelectorAll('.tab').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
 $('#settings-btn').onclick = settingsModal;
+$('#conflict-btn').onclick = conflictsModal;
 $('#sync-btn').onclick = () => syncNow(true);
 $('#side-add').onclick = () => taskModal(null);
 $('#gtasks-btn').onclick = googleTasksModal;
@@ -731,6 +864,7 @@ document.addEventListener('visibilitychange', async () => {
   render();
   if (await refreshFeeds()) render();
   if (G.isSignedIn()) syncNow(false);
+  autoRefreshExcel();
 });
 setInterval(() => { if (!drag) renderWeek(); }, 60000);
 setInterval(async () => { if (document.visibilityState === 'visible' && await refreshFeeds()) render(); }, 15 * 60000);
@@ -741,5 +875,7 @@ render();
 scrollToMorning();
 if (getClientId()) { if (G.isSignedIn()) syncNow(false); else setSync('pending', 'Pulsa para conectar con Google y sincronizar'); }
 refreshFeeds().then((c) => { if (c) render(); });
+setTimeout(() => { if (window.XLSX) autoRefreshExcel(); else window.addEventListener('load', autoRefreshExcel, { once: true }); }, 1500);
+setInterval(() => { if (document.visibilityState === 'visible') autoRefreshExcel(); }, 3600 * 1000);
 if (!state.work.importedAt && !liveTasks().length) setTimeout(() => toast('Empieza en ⚙︎ Ajustes: carga tu programación y tus calendarios', 5000), 600);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -71,12 +71,13 @@ async function moveEvent(ev, start, end) {
   if (!ev.uid) { toast('Este evento no tiene identificador de iCloud; no se puede mover'); return; }
   const key = ev.origId || ev.id;
   const occ = ev.occ || ev.recurrenceId || (ev.recurring ? ev.start.toISOString() : null);
+  const near = (ev.origStart ? new Date(ev.origStart) : ev.start).toISOString(); // para localizarlo en iCloud
   const body = ev.allDay
-    ? { uid: ev.uid, occurrence: occ && toYMD(new Date(occ)), allDay: true, start: toYMD(start), end: toYMD(end) }
-    : { uid: ev.uid, occurrence: occ, allDay: false, start: start.toISOString(), end: end.toISOString() };
+    ? { uid: ev.uid, occurrence: occ && toYMD(new Date(occ)), allDay: true, start: toYMD(start), end: toYMD(end), near }
+    : { uid: ev.uid, occurrence: occ, allDay: false, start: start.toISOString(), end: end.toISOString(), near };
   const mv = getMoves(), prev = mv[key];
   const { start: _s, end: _e, id: _i, origId: _o, pending: _p, ...rest } = ev;
-  mv[key] = { uid: ev.uid, occ, start: start.toISOString(), end: end.toISOString(), at: Date.now(), ev: rest };
+  mv[key] = { uid: ev.uid, occ, start: start.toISOString(), end: end.toISOString(), at: Date.now(), ev: { ...rest, origStart: near } };
   setMoves(mv); render();
   toast('Moviendo en iCloud…');
   try {

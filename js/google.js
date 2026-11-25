@@ -2,9 +2,7 @@
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.appdata',
   'https://www.googleapis.com/auth/tasks',
-  'https://www.googleapis.com/auth/gmail.readonly',
 ].join(' ');
-const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 const FILE_NAME = 'calendario-fs-data.json';
 
 let tokenClient = null;
@@ -23,9 +21,7 @@ function loadGis() {
   });
 }
 
-// Un token antiguo sin permiso de Gmail cuenta como "no conectado" para pedir el permiso nuevo
-const hasAllScopes = () => !!token && (token.scope || '').includes(GMAIL_SCOPE);
-export function isSignedIn() { return !!token && token.expires_at > Date.now() + 60000 && hasAllScopes(); }
+export function isSignedIn() { return !!token && token.expires_at > Date.now() + 60000; }
 export function hasEverSignedIn() { try { return localStorage.getItem('cfs.google') === '1'; } catch { return false; } }
 
 export async function signIn(clientId, { silent = false } = {}) {
@@ -37,7 +33,7 @@ export async function signIn(clientId, { silent = false } = {}) {
       callback: (r) => {
         if (r.error) { pending?.rej(new Error(r.error_description || r.error)); }
         else {
-          token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 30) * 1000, scope: r.scope || '' };
+          token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 30) * 1000 };
           keepToken();
           try { localStorage.setItem('cfs.google', '1'); } catch {}
           pending?.res(token);
@@ -50,8 +46,7 @@ export async function signIn(clientId, { silent = false } = {}) {
   }
   return new Promise((res, rej) => {
     pending = { res, rej };
-    const needConsent = !hasEverSignedIn() || (token && !hasAllScopes());
-    tokenClient.requestAccessToken({ prompt: silent ? '' : (needConsent ? 'consent' : '') });
+    tokenClient.requestAccessToken({ prompt: silent ? '' : (hasEverSignedIn() ? '' : 'consent') });
   });
 }
 
@@ -125,31 +120,4 @@ export async function setTaskCompleted(listId, taskId, done) {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(done ? { status: 'completed' } : { status: 'needsAction', completed: null }),
   });
-}
-
-// ---------- Gmail: Excel de la programación recibido por correo ----------
-function b64urlToBuffer(data) {
-  const bin = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out.buffer;
-}
-function findXlsxPart(part) {
-  if (!part) return null;
-  if (part.filename && /\.xls[xm]?$/i.test(part.filename) && part.body?.attachmentId) return part;
-  for (const p of part.parts || []) { const r = findXlsxPart(p); if (r) return r; }
-  return null;
-}
-/** Último correo que cumpla `query` con un Excel adjunto. Si su id es `skipId`, no descarga nada. */
-export async function latestExcelFromGmail(query, skipId) {
-  const list = await api(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=5&q=${encodeURIComponent(query)}`);
-  for (const m of list.messages || []) {
-    if (m.id === skipId) return { id: m.id, unchanged: true };
-    const msg = await api(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`);
-    const part = findXlsxPart(msg.payload);
-    if (!part) continue;
-    const att = await api(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}/attachments/${part.body.attachmentId}`);
-    return { id: m.id, date: new Date(+msg.internalDate), filename: part.filename, buffer: b64urlToBuffer(att.data) };
-  }
-  return null;
 }

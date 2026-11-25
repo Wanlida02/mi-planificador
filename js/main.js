@@ -60,8 +60,9 @@ async function caldavCall(path, body) {
   let r;
   try { r = await fetch(base + path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', 'X-Planner-Token': state.settings.caldavToken }, body: body ? JSON.stringify(body) : undefined }); }
   catch { throw new Error('No se pudo conectar con el worker (¿has desplegado la versión nueva?)'); }
-  let j = {}; try { j = await r.json(); } catch {}
-  if (!r.ok) throw new Error(j.error || `El worker respondió ${r.status}`);
+  const txt = await r.text();
+  let j = {}; try { j = JSON.parse(txt); } catch {}
+  if (!r.ok) throw new Error(j.error || (txt && txt.length < 300 ? txt : '') || `El worker respondió ${r.status}`);
   return j;
 }
 /** Mueve un evento de iCloud (solo esa ocurrencia si se repite). start/end: Date. */

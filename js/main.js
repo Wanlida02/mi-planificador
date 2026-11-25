@@ -635,24 +635,26 @@ function endDrag() {
   render();
 }
 
-// crear arrastrando en hueco vacío (ratón) o doble clic / doble toque
+// Un toque/clic en un hueco vacío → «Nueva tarea» a esa hora. Con ratón, arrastrar elige además la duración.
+let slotDown = null, lastScrollAt = 0;
+$('#cal-scroll').addEventListener('scroll', () => { lastScrollAt = Date.now(); }, { passive: true });
 $('#cal-grid').addEventListener('pointerdown', (e) => {
+  slotDown = null;
   const col = e.target.closest('.day-col');
-  if (!col || e.target !== col) return;
+  if (!col || e.target !== col || moveMode) return;
   lastPointerType = e.pointerType;
-  if (e.pointerType === 'mouse') { if (e.button === 0) press(e, { type: 'create', col }); return; }
-  // doble toque en hueco vacío
-  const now = Date.now(), key = 'slot' + col.dataset.date;
-  if (lastTap.key === key && now - lastTap.t < 380 && Math.abs(lastTap.y - e.clientY) < 30) {
-    lastTap = { key: '', t: 0 };
-    newTaskAt(col, e.clientY);
-  } else lastTap = { key, t: now, y: e.clientY };
+  // si el calendario venía desplazándose (inercia), este toque solo lo frena: no crear nada
+  slotDown = { x: e.clientX, y: e.clientY, t: Date.now(), col, scrolling: Date.now() - lastScrollAt < 150 };
+  if (e.pointerType === 'mouse' && e.button === 0) press(e, { type: 'create', col });
 });
-$('#cal-grid').addEventListener('dblclick', (e) => {
-  const col = e.target.closest('.day-col');
-  if (!col || e.target !== col || lastPointerType === 'touch') return;
-  newTaskAt(col, e.clientY);
+$('#cal-grid').addEventListener('pointerup', (e) => {
+  const d = slotDown; slotDown = null;
+  if (!d || moveMode || drag || d.scrolling || !d.col.isConnected) return;
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10 || Date.now() - d.t > 700) return; // desplazamiento o pulsación larga
+  if (Date.now() - dragEndedAt < 300) return;
+  newTaskAt(d.col, d.y);
 });
+$('#cal-grid').addEventListener('pointercancel', () => { slotDown = null; });
 function newTaskAt(col, y) {
   const m = Math.floor(minAt(col, y) / 30) * 30;
   taskModal(null, { date: col.dataset.date, start: min2hm(Math.max(0, Math.min(1380, m))), duration: 60 });
@@ -697,13 +699,16 @@ mform.addEventListener('submit', (e) => { e.preventDefault(); onSubmit?.(); });
 function openModal(title, body, foot, submit, { sheet = false } = {}) {
   onSubmit = submit;
   modal.classList.toggle('sheet', sheet);
+  modalOpenedAt = Date.now();
   mform.replaceChildren(
     el('div', { class: 'm-head' }, el('h2', { text: title }), el('button', { type: 'button', class: 'btn icon', 'aria-label': 'Cerrar', text: '×', onclick: closeModal })),
     el('div', { class: 'm-body' }, body), el('div', { class: 'm-foot' }, foot));
   if (!modal.open) modal.showModal();
 }
 function closeModal() { modal.close(); onSubmit = null; }
-modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+let modalOpenedAt = 0;
+// tocar fuera cierra, salvo justo al abrir (p. ej. el 2.º clic de un doble clic en un hueco)
+modal.addEventListener('click', (e) => { if (e.target === modal && Date.now() - modalOpenedAt > 500) closeModal(); });
 const field = (label, input) => el(input.matches?.('input,select,textarea') ? 'label' : 'div', { class: 'field' }, el('span', { text: label }), input);
 
 function seg(options, value, onPick) {

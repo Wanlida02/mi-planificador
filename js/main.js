@@ -2,6 +2,7 @@ import { state, save, onChange, upsertTask, deleteTask, updateSettings, setWork,
 import { parseProgramacion } from './programacion.js';
 import { refreshFeeds, feedEvents, feedStatus, clearFeedCache } from './feeds.js';
 import * as G from './google.js';
+import * as LF from './localfile.js';
 import { el, toast, toYMD, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
 
 const $ = (s) => document.querySelector(s);
@@ -282,6 +283,7 @@ function conflictsModal() {
 
 function render() {
   updateConflicts();
+  updateExcelBtn();
   renderWeek();
   renderSide();
   if (tab === 'backlog') renderKanban();
@@ -632,6 +634,18 @@ function settingsModal() {
   const proxy = el('input', { value: s.proxy, placeholder: 'https://ics-proxy.tu-usuario.workers.dev' });
   const excelLink = el('input', { value: s.excelLink || '', placeholder: 'https://www.icloud.com/iclouddrive/…#Programacion_Anual_2026' });
   const linkStatus = el('div', { class: 'muted', text: s.excelLink ? `Actualización diaria activa. Última comprobación: ${lastExcelCheck() ? new Date(lastExcelCheck()).toLocaleString('es-ES') : 'nunca'}.` : 'Sin enlace: la programación solo cambia cuando cargas el archivo a mano.' });
+  const localStatus = el('div', { class: 'muted' });
+  LF.getHandle().then((h) => { localStatus.textContent = h ? `📌 Archivo recordado: “${h.name}”. Se relee al abrir la app.` : ''; });
+  const localBtn = LF.supported ? el('button', { type: 'button', class: 'btn small', text: '📌 Elegir y recordar archivo del ordenador', onclick: async () => {
+    try {
+      updateSettings({ initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value });
+      const h = await LF.pick();
+      const n = await readLocal(h, { force: true, ask: true });
+      localStatus.textContent = `📌 Archivo recordado: “${h.name}”. Se relee al abrir la app.`;
+      if (n) workStatus.textContent = excelMsg(n, h.name);
+    } catch (e) { if (e.name !== 'AbortError') localStatus.textContent = '⚠︎ ' + e.message; }
+  } }) : null;
+  const reminder = el('input', { type: 'number', min: 1, max: 60, value: s.reminderDays || 7, style: { width: '70px' } });
   const linkBtn = el('button', { type: 'button', class: 'btn small', text: '↻ Actualizar ahora desde el enlace', onclick: async () => {
     updateSettings({ excelLink: excelLink.value.trim(), proxy: proxy.value.trim() });
     linkStatus.textContent = 'Descargando…';
@@ -654,9 +668,13 @@ function settingsModal() {
 
   const body = [
     el('div', { class: 'section', style: { borderTop: 0, paddingTop: 0 } }, el('h3', { text: '📄 Programación anual (Excel)' }),
-      el('div', { class: 'muted', text: 'Elige “Programación Anual 2026.xlsx” desde iCloud Drive. Se marcan los días con tus iniciales: viaje de varios días y jornada de un día. Al cargar otro año se conservan los anteriores.' }),
+      el('div', { class: 'muted', text: 'Elige el Excel de la programación (descargado de Teams). Se marcan los días con tus iniciales: viaje de varios días y jornada de un día. Las celdas tachadas se ignoran. Al cargar otro año se conservan los anteriores.' }),
       fileInput, workStatus,
-      field('Enlace de iCloud Drive al Excel (actualización diaria automática)', excelLink), linkBtn, linkStatus,
+      localBtn ? el('div', { class: 'muted', text: 'En el ordenador del trabajo (Edge/Chrome): si sincronizas la carpeta de Teams con OneDrive, elige aquí el archivo sincronizado y la app lo releerá sola cada vez que la abras.' }) : null,
+      localBtn, localStatus,
+      el('div', { class: 'row2' }, field('Recordarme actualizarla cada (días)', reminder), el('span')),
+      el('details', {}, el('summary', { class: 'muted', text: 'Alternativa: enlace de iCloud Drive (actualización diaria)' }),
+        field('Enlace de iCloud Drive al Excel', excelLink), linkBtn, linkStatus),
       el('div', { class: 'row2' }, field('Mis iniciales', initials), el('span')),
       el('div', { class: 'row2' }, field('Viaje: desde', tS), field('Viaje: hasta', tE)),
       el('div', { class: 'row2' }, field('Día suelto: desde', dS), field('Día suelto: hasta', dE))),
@@ -693,7 +711,7 @@ function settingsModal() {
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
-      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(),
+      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), reminderDays: Math.max(1, +reminder.value || 7),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
     });
@@ -722,19 +740,64 @@ async function refreshExcel(force = false) {
   try { localStorage.setItem(EXCEL_KEY, String(Date.now())); } catch {}
   return n;
 }
-async function autoRefreshExcel() {
-  try { const n = await refreshExcel(false); if (n) toast('Programación actualizada desde iCloud Drive'); }
-  catch (e) { toast('⚠︎ ' + e.message, 5000); }
+const LOCAL_KEY = 'cfs.localCheck';
+const lastLocalCheck = () => { try { return +localStorage.getItem(LOCAL_KEY) || 0; } catch { return 0; } };
+
+/** Lee el archivo local recordado. Importa si cambió (o si force). */
+async function readLocal(h, { force = false, ask = false } = {}) {
+  if (await LF.permission(h, ask) !== 'granted') return null;
+  const f = await h.getFile();
+  try { localStorage.setItem(LOCAL_KEY, String(Date.now())); } catch {}
+  if (!force && state.work.fileModified === f.lastModified && state.work.fileName === f.name) return null;
+  const n = await importExcel(await f.arrayBuffer(), f.name, { fileModified: f.lastModified });
+  return n;
 }
 
-async function importExcel(buf, fileName) {
+async function autoRefreshExcel() {
+  try {
+    const h = await LF.getHandle();
+    if (h) { const n = await readLocal(h); if (n) toast('📄 Programación actualizada desde el archivo del ordenador'); }
+    else { const n = await refreshExcel(false); if (n) toast('Programación actualizada desde iCloud Drive'); }
+  } catch (e) { toast('⚠︎ Programación: ' + e.message, 5000); }
+  updateExcelBtn();
+}
+
+/** Botón de arriba: recordatorio si la programación está vieja, o releer el archivo local si falta permiso. */
+async function updateExcelBtn() {
+  const btn = $('#excel-btn');
+  const days = Math.floor((Date.now() - Math.max(state.work.importedAt || 0, lastLocalCheck())) / 86400000);
+  const stale = state.work.importedAt && days >= (state.settings.reminderDays || 7);
+  const h = await LF.getHandle();
+  const needPerm = h && (await LF.permission(h).catch(() => 'denied')) !== 'granted';
+  btn.hidden = !(stale || needPerm);
+  const narrow = window.innerWidth <= 720;
+  btn.textContent = needPerm ? (narrow ? '📄 Releer' : '📄 Releer programación') : (narrow ? `📄 ${days} d` : `📄 Actualizar programación (hace ${days} días)`);
+  btn.title = needPerm ? 'Volver a leer el Excel recordado del ordenador' : `La programación se cargó hace ${days} días. Pulsa para elegir el archivo actualizado.`;
+}
+const pickerInput = el('input', { type: 'file', accept: '.xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', style: { display: 'none' } });
+document.body.append(pickerInput);
+pickerInput.addEventListener('change', async () => {
+  const f = pickerInput.files[0]; if (!f) return;
+  try { const n = await importExcel(await f.arrayBuffer(), f.name); toast(excelMsg(n, f.name), 6000); } catch (e) { toast('⚠︎ ' + e.message, 6000); }
+  pickerInput.value = ''; updateExcelBtn();
+});
+async function excelBtnClick() {
+  const h = await LF.getHandle();
+  if (h) {
+    try { const n = await readLocal(h, { force: true, ask: true }); if (n) { toast(excelMsg(n, h.name), 6000); updateExcelBtn(); return; } }
+    catch (e) { toast('⚠︎ No pude leer “' + h.name + '”: ' + e.message + '. Elige el archivo de nuevo.', 6000); }
+  }
+  pickerInput.click();
+}
+
+async function importExcel(buf, fileName, meta = {}) {
   if (!window.XLSX) throw new Error('No se ha cargado la librería de Excel (¿sin conexión?)');
   const wb = XLSX.read(buf, { type: 'array', cellStyles: true });
   const s = state.settings;
   const r = parseProgramacion(wb, { initials: s.initials, tripHours: [s.tripStart, s.tripEnd], dayHours: [s.dayWorkStart, s.dayWorkEnd] });
   if (!r.years.length) throw new Error('No encuentro ninguna hoja “Programación AAAA” en el archivo');
   const keep = state.work.events.filter((e) => !r.years.includes(+e.date.slice(0, 4)));
-  setWork({ events: [...keep, ...r.events], fileName, importedAt: Date.now() });
+  setWork({ events: [...keep, ...r.events], fileName, importedAt: Date.now(), fileModified: meta.fileModified || null });
   return { work: r.events.filter((e) => e.kind === 'trabajo').length, fest: r.events.filter((e) => e.kind === 'festivo').length, years: r.years, cancelled: r.cancelled.length };
 }
 
@@ -836,6 +899,7 @@ $('#today').onclick = () => { goTo(new Date()); scrollToMorning(); };
 document.querySelectorAll('.tab').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
 $('#settings-btn').onclick = settingsModal;
 $('#conflict-btn').onclick = conflictsModal;
+$('#excel-btn').onclick = excelBtnClick;
 $('#sync-btn').onclick = () => syncNow(true);
 $('#side-add').onclick = () => taskModal(null);
 $('#gtasks-btn').onclick = googleTasksModal;
@@ -877,5 +941,6 @@ if (getClientId()) { if (G.isSignedIn()) syncNow(false); else setSync('pending',
 refreshFeeds().then((c) => { if (c) render(); });
 setTimeout(() => { if (window.XLSX) autoRefreshExcel(); else window.addEventListener('load', autoRefreshExcel, { once: true }); }, 1500);
 setInterval(() => { if (document.visibilityState === 'visible') autoRefreshExcel(); }, 3600 * 1000);
+updateExcelBtn();
 if (!state.work.importedAt && !liveTasks().length) setTimeout(() => toast('Empieza en ⚙︎ Ajustes: carga tu programación y tus calendarios', 5000), 600);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -7,7 +7,7 @@ Calendario semanal interactivo para planificar tareas encima de:
   - jornada de un día → **07:00–15:00**
   - los festivos de la hoja aparecen arriba, como eventos de todo el día
   - las celdas **tachadas** (relleno con rayas diagonales o trama) se consideran **canceladas** y se ignoran
-  - **actualización diaria** automática si pegas el enlace de iCloud Drive al Excel
+  - recordatorio para actualizarla cada semana y lectura automática del archivo local en el ordenador
 - **Avisos de solapes**: si un día de trabajo coincide con una cita (médico, pilates…), con una tarea programada o con otro trabajo, aparece el botón ⚠︎ arriba, el bloque se marca en rojo y llega una notificación (cuando la app se abre o se actualiza)
 - **Calendarios de iCloud**: “Familia” (Luna) en **rosa pastel** y “Calendar” (personal) en lila.
 - **Tus tareas**: **azul** si están pendientes y **verde** si están hechas. Se pueden arrastrar (entre días o dentro del mismo día), alargar o acortar tirando del borde inferior y editar con doble clic (en el móvil, doble toque).
@@ -28,7 +28,10 @@ En el iPhone: Safari → Compartir → **Añadir a pantalla de inicio**, para us
 
 ### 2. Cargar la programación anual
 ⚙︎ Ajustes → **Programación anual** → elige `Programación Anual 2026.xlsx` desde iCloud Drive.
-**Actualización diaria**: en el iPhone, app Archivos → mantén pulsado el Excel → **Compartir** → arriba elige **Colaborar** → *Opciones de compartir*: **Cualquiera con el enlace** y **Solo ver** → **Copiar enlace**. Pégalo en ⚙︎ Ajustes → *Enlace de iCloud Drive al Excel* (necesita el proxy del paso 3). Si sustituyes el archivo por uno nuevo, el enlace cambia: vuelve a pegarlo.
+**Mantenerla al día** (el original está en el Teams del trabajo):
+- **Manual (iPhone u ordenador)**: descarga el Excel de Teams y cárgalo. Si pasan más de 7 días (configurable) sin actualizarla, aparece arriba el botón **📄 Actualizar programación**: un toque y eliges el archivo.
+- **Automática en el ordenador (Edge/Chrome)**: en Teams, en la carpeta del canal, pulsa **Sincronizar** (o *Agregar acceso directo a Mis archivos*) para que OneDrive mantenga una copia local. En ⚙︎ Ajustes → **📌 Elegir y recordar archivo del ordenador** elige esa copia. La app la relee cada vez que se abre y, si cambió, actualiza la programación (y se sincroniza al iPhone mediante Google). Si el navegador pide permiso de nuevo, sale el botón **📄 Releer programación**.
+- *Alternativa*: enlace de iCloud Drive (en Ajustes, apartado plegado), con el Worker del paso 3.
 
 Cuando llegue la de 2027, cárgala igual: se sustituyen los años que traiga el archivo y se conservan los demás.
 Si el Excel cambia, vuelve a cargarlo.

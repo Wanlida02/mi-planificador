@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <title>Mi Planificador</title>
 <meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#18191c" media="(prefers-color-scheme: dark)">
@@ -62,8 +62,11 @@
           <div class="seg-mini" id="view-seg" role="group" aria-label="Vista">
             <button type="button" data-days="1">Día</button><button type="button" data-days="3">3 días</button><button type="button" data-days="7">Semana</button>
           </div>
-          <div class="seg-mini" role="group" aria-label="Zoom de horas">
-            <button type="button" id="zoom-out" aria-label="Reducir horas">−</button><button type="button" id="zoom-in" aria-label="Ampliar horas">+</button>
+          <div class="tools-right">
+            <div class="seg-mini" role="group" aria-label="Zoom de horas">
+              <button type="button" id="zoom-out" aria-label="Reducir horas">−</button><button type="button" id="zoom-in" aria-label="Ampliar horas">+</button>
+            </div>
+            <button type="button" class="add-btn" id="add-btn" aria-label="Nueva tarea o bloqueo">＋ Nuevo</button>
           </div>
         </div>
         <div class="cal-head" id="cal-head"></div>
@@ -85,13 +88,13 @@
       <button type="button" class="tray-head" id="tray-head"><span id="tray-title">Por programar</span><span class="tray-hint">mantén pulsada una tarea y arrástrala al calendario</span><span class="chev">▾</span></button>
       <div class="tray-list" id="tray-list"></div>
     </div>
-    <button type="button" class="fab" id="fab" aria-label="Nueva tarea">+</button>
     <div class="legend">
       <span><i class="sw trabajo"></i>Trabajo</span>
       <span><i class="sw familia"></i>Luna / familia</span>
       <span><i class="sw personal"></i>Personal</span>
       <span><i class="sw task"></i>Tarea pendiente</span>
       <span><i class="sw done"></i>Tarea hecha</span>
+      <span><i class="sw block"></i>Bloqueo de agenda</span>
     </div>
   </section>
 

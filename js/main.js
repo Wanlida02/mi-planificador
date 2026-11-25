@@ -105,6 +105,8 @@ function sortTasks(list) {
   return list.sort((a, b) => (PRIO_RANK[a.priority || ''] - PRIO_RANK[b.priority || '']) || ((a.order || 0) - (b.order || 0)));
 }
 const isScheduled = (t) => !!(t.date && t.start);
+const isBlock = (t) => t?.kind === 'block';
+
 
 /** Bloques ocupados/visibles de un día. */
 function itemsForDay(dateStr, fe) {
@@ -125,10 +127,10 @@ function itemsForDay(dateStr, fe) {
   }
   for (const t of liveTasks()) {
     // tareas sin hora pero con fecha (p. ej. de Google Tasks): arriba, en la fila de todo el día
-    if (!t.start && !t.done && (t.date || t.due) === dateStr) { allDay.push({ type: 'task', title: t.title, task: t, date: dateStr }); continue; }
+    if (!t.start && !t.done && !isBlock(t) && (t.date || t.due) === dateStr) { allDay.push({ type: 'task', title: t.title, task: t, date: dateStr }); continue; }
     if (t.date !== dateStr || !t.start) continue;
     const s = hm2min(t.start);
-    timed.push({ type: 'task', date: dateStr, s, e: s + (t.duration || 60), title: t.title, task: t });
+    timed.push({ type: isBlock(t) ? 'block' : 'task', date: dateStr, s, e: s + (t.duration || 60), title: t.title, task: t });
   }
   return { timed, allDay };
 }
@@ -204,7 +206,7 @@ function renderBlock(it) {
   const style = { top: top + 'px', height: h + 'px', left: `calc(${it.col * w}% + 1px)`, width: `calc(${w}% - 3px)` };
   if (e <= s) style.display = 'none';
   const time = `${min2hm(it.s % 1440)}–${min2hm(Math.min(it.e, 1440) % 1440 || 0).replace(/^00:00$/, '24:00')}`;
-  if (it.type !== 'task') {
+  if (it.type !== 'task' && it.type !== 'block') {
     const movable = !!(it.ref?.feed && caldavOn());
     const b = el('div', { class: `ev ${it.type}${movable ? ' movable' : ''}${it.ref?.pending ? ' pending' : ''}${conflictIds.has(it.ref?.id) ? ' conflict' : ''}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, onclick: () => { if (!suppressClick && !moveMode) detailSheet(it); } },
       el('div', { class: 't', text: it.title }), el('div', { class: 's', text: [time, it.sub].filter(Boolean).join(' · ') }));
@@ -215,10 +217,11 @@ function renderBlock(it) {
     return b;
   }
   const t = it.task;
-  const blk = el('div', { class: `ev task${t.done ? ' done' : ''}${h < 34 ? ' short' : ''}${conflictIds.has(t.id) ? ' conflict' : ''}`, style, dataset: { id: t.id }, title: `${t.title}\n${time} (${fmtDur(t.duration)})\nDoble clic para editar · arrastra para mover` },
+  const blkKind = isBlock(t);
+  const blk = el('div', { class: `ev task${blkKind ? ' block' : ''}${t.done ? ' done' : ''}${h < 34 ? ' short' : ''}${conflictIds.has(t.id) ? ' conflict' : ''}`, style, dataset: { id: t.id }, title: `${blkKind ? 'Bloqueo de agenda: ' : ''}${t.title}\n${time} (${fmtDur(t.duration)})\nDoble clic para editar · arrastra para mover` },
     el('div', { class: 'row' },
-      el('button', { type: 'button', class: 'ck', 'aria-label': t.done ? 'Marcar pendiente' : 'Marcar hecha', text: t.done ? '✓' : '', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleDone(t); } }),
-      el('div', { class: 't', text: t.title || '(sin título)' })),
+      blkKind ? null : el('button', { type: 'button', class: 'ck', 'aria-label': t.done ? 'Marcar pendiente' : 'Marcar hecha', text: t.done ? '✓' : '', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleDone(t); } }),
+      el('div', { class: 't', text: (blkKind ? '🔒 ' : '') + (t.title || '(sin título)') })),
     el('div', { class: 's', text: time }),
     el('div', { class: 'rz', onpointerdown: (e) => press(e, { type: 'resize', task: t, el: blk }) }));
   blk.addEventListener('pointerdown', (e) => press(e, { type: 'move', task: t, el: blk }));
@@ -254,7 +257,7 @@ function card(t, { compact = false } = {}) {
 }
 
 function renderSide() {
-  const list = sortTasks(liveTasks().filter((t) => !t.done && !isScheduled(t)));
+  const list = sortTasks(liveTasks().filter((t) => !t.done && !isScheduled(t) && !isBlock(t)));
   $('#side-list').replaceChildren(...(list.length ? list.map((t) => card(t, { compact: true })) : [el('div', { class: 'empty', text: 'Nada pendiente de programar 🎉' })]));
   $('#tray-list').replaceChildren(...(list.length ? list.map((t) => card(t, { compact: true })) : [el('div', { class: 'empty', text: 'Nada pendiente de programar 🎉 · pulsa + para crear una tarea' })]));
   $('#tray-title').textContent = list.length ? `Por programar (${list.length})` : 'Nada por programar · pulsa + para crear una tarea';
@@ -264,7 +267,7 @@ function renderSide() {
 
 function renderKanban() {
   const cat = $('#filter-cat').value, showSched = $('#filter-scheduled').checked, showDone = $('#filter-done').checked;
-  const tasks = liveTasks().filter((t) => (showDone || !t.done) && (showSched || !isScheduled(t) || t.done && showDone)
+  const tasks = liveTasks().filter((t) => !isBlock(t) && (showDone || !t.done) && (showSched || !isScheduled(t) || t.done && showDone)
     && (!cat || (cat === '-' ? !t.category : t.category === cat)));
   $('#kanban').replaceChildren(...PRIORITIES.map((p) => {
     const items = sortTasks(tasks.filter((t) => (t.priority || '') === p.id));
@@ -352,7 +355,7 @@ const hmOf = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinu
 function conflictsModal() {
   const dismissed = readSet(DISMISS_KEY);
   const rows = conflicts.map((c) => {
-    const label = { cita: c.other.type === 'familia' ? 'Luna / familia' : 'Personal', tarea: 'Tarea', trabajo: 'Otro trabajo' }[c.kind];
+    const label = { cita: c.other.type === 'familia' ? 'Luna / familia' : 'Personal', tarea: isBlock(c.other.task) ? 'Bloqueo de agenda' : 'Tarea', trabajo: 'Otro trabajo' }[c.kind];
     const row = el('div', { class: `conflict-row k-${c.other.type}` },
       el('div', { class: 'cr-date', text: fmtDay(c.date) }),
       el('div', { class: 'cr-body' },
@@ -431,8 +434,8 @@ function renderToday() {
       const isNow = ds === todayStr && it.s <= nowMin && it.e > nowMin, past = ds === todayStr && it.e <= nowMin;
       out.push(el('button', { type: 'button', class: `ag-row ${it.type}${t?.done ? ' done' : ''}${isNow ? ' now' : ''}${past ? ' past' : ''}`, onclick: () => detailSheet(it) },
         el('div', { class: 'tm' }, min2hm(it.s), el('small', { text: endHM(Math.min(it.e, 1440)) })),
-        el('div', { class: 'ti' }, (t ? (t.done ? '✓ ' : '☐ ') : '') + it.title,
-          el('div', { class: 'su', text: [it.type === 'trabajo' ? it.sub : t ? fmtDur(t.duration || 60) : (CAT_LABEL[it.type] || '') + (it.ref?.location ? ' · ' + it.ref.location : '')].filter(Boolean).join(' · ') }),
+        el('div', { class: 'ti' }, (t ? (isBlock(t) ? '🔒 ' : t.done ? '✓ ' : '☐ ') : '') + it.title,
+          el('div', { class: 'su', text: [it.type === 'trabajo' ? it.sub : t ? (isBlock(t) ? 'Bloqueo de agenda · ' : '') + fmtDur(t.duration || 60) : (CAT_LABEL[it.type] || '') + (it.ref?.location ? ' · ' + it.ref.location : '')].filter(Boolean).join(' · ') }),
           conf(it) ? el('div', { class: 'ag-warn', text: '⚠︎ Se solapa con el trabajo' }) : null),
         isNow ? el('span', { class: 'tag', text: 'Ahora' }) : el('span')));
     }
@@ -453,7 +456,7 @@ function render() {
 // ======================================================================
 // Arrastrar / redimensionar (ratón y táctil)
 // ======================================================================
-let pressSt = null, drag = null, suppressClick = false, lastTap = { key: '', t: 0 };
+let dragEndedAt = 0, pressSt = null, drag = null, suppressClick = false, lastTap = { key: '', t: 0 };
 
 function press(e, info) {
   if (e.button !== 0 && e.pointerType === 'mouse') return;
@@ -603,6 +606,7 @@ function cleanupDrag() {
   document.querySelectorAll('.kcol.over').forEach((k) => k.classList.remove('over'));
   document.body.classList.remove('is-dragging');
   suppressClick = true; setTimeout(() => { suppressClick = false; }, 50);
+  dragEndedAt = Date.now();
 }
 function abortDrag() { cleanupDrag(); drag = null; render(); }
 
@@ -719,8 +723,9 @@ function durationSelect(value) {
 
 function taskModal(t, preset = {}) {
   const isNew = !t;
-  const d = { title: '', notes: '', date: '', start: '', duration: 60, priority: '', category: '', due: '', done: false, ...(t || {}), ...preset };
-  const title = el('input', { class: 'title-input', value: d.title, placeholder: 'Título de la tarea', required: true });
+  const d = { title: '', notes: '', date: '', start: '', duration: 60, priority: '', category: '', due: '', done: false, kind: 'task', ...(t || {}), ...preset };
+  let kind = d.kind === 'block' ? 'block' : 'task';
+  const title = el('input', { class: 'title-input', value: d.title, placeholder: kind === 'block' ? 'Motivo (p. ej. Llevar a Luna al cole)' : 'Título de la tarea', required: true });
   const notes = el('textarea', { placeholder: 'Notas' }); notes.value = d.notes || '';
   const date = el('input', { type: 'date', value: d.date || '' });
   const start = el('input', { type: 'time', value: d.start || '' });
@@ -734,34 +739,51 @@ function taskModal(t, preset = {}) {
     date.value = s.date; start.value = s.start; toast(`Hueco: ${fmtDay(s.date)} ${s.start}`);
   } });
   const unBtn = el('button', { type: 'button', class: 'btn small', text: 'Quitar del calendario', onclick: () => { date.value = ''; start.value = ''; } });
+  const errBox = el('div', { class: 'err' });
+  const classif = el('div', { class: 'section' });
+  const applyKind = () => {
+    classif.hidden = kind === 'block'; unBtn.hidden = kind === 'block';
+    title.placeholder = kind === 'block' ? 'Motivo (p. ej. Llevar a Luna al cole)' : 'Título de la tarea';
+    $('#modal h2') && ($('#modal h2').textContent = (isNew ? (kind === 'block' ? 'Nuevo bloqueo de agenda' : 'Nueva tarea') : (kind === 'block' ? 'Editar bloqueo' : 'Editar tarea')));
+    if (kind === 'block' && !date.value) { const n = new Date(); date.value = toYMD(n); start.value = start.value || min2hm(Math.min(1380, (n.getHours() + 1) * 60)); }
+  };
+  classif.append(el('h3', { text: 'Clasificación' }),
+    field('Prioridad', seg(PRIORITIES, prio, (v) => { prio = v; })),
+    field('Categoría', seg([...CATEGORIES.map((c) => ({ id: c, label: c })), { id: '', label: 'Ninguna' }], cat, (v) => { cat = v; })),
+    el('div', { class: 'row2' }, field('Fecha límite', due), el('label', { class: 'chk', style: { alignSelf: 'end', paddingBottom: '8px' } }, done, ' Hecha')));
+  const kindSeg = seg([{ id: 'task', label: '☐ Tarea' }, { id: 'block', label: '🔒 Bloqueo de agenda' }], kind, (v) => { kind = v; applyKind(); });
   const body = [
+    kindSeg,
+    el('div', { class: 'muted', text: 'Un bloqueo reserva ese tiempo (p. ej. llevar a Luna al cole): no es una tarea, no sale en Pendientes y cuenta como ocupado.' }),
     title,
     el('div', { class: 'section' }, el('h3', { text: 'Programación' }),
       el('div', { class: 'row3' }, field('Día', date), field('Hora inicio', start), field('Duración', dur)),
       el('div', { class: 'seg' }, slotBtn, unBtn)),
-    el('div', { class: 'section' }, el('h3', { text: 'Clasificación' }),
-      field('Prioridad', seg(PRIORITIES, prio, (v) => { prio = v; })),
-      field('Categoría', seg([...CATEGORIES.map((c) => ({ id: c, label: c })), { id: '', label: 'Ninguna' }], cat, (v) => { cat = v; })),
-      el('div', { class: 'row2' }, field('Fecha límite', due), el('label', { class: 'chk', style: { alignSelf: 'end', paddingBottom: '8px' } }, done, ' Hecha'))),
+    errBox,
+    classif,
     field('Notas', notes),
     t?.google ? el('div', { class: 'muted', text: 'Importada de Google Tasks. Al marcarla como hecha se completa también allí.' }) : null,
   ];
   const foot = [
-    !isNew ? el('div', { class: 'left' }, el('button', { type: 'button', class: 'btn danger', text: 'Eliminar', onclick: () => { if (confirm('¿Eliminar esta tarea?')) { deleteTask(t.id); closeModal(); toast('Tarea eliminada'); } } })) : null,
+    !isNew ? el('div', { class: 'left' }, el('button', { type: 'button', class: 'btn danger', text: 'Eliminar', onclick: () => { if (confirm(kind === 'block' ? '¿Eliminar este bloqueo?' : '¿Eliminar esta tarea?')) { deleteTask(t.id); closeModal(); toast(kind === 'block' ? 'Bloqueo eliminado' : 'Tarea eliminada'); } } })) : null,
     el('button', { type: 'button', class: 'btn', text: 'Cancelar', onclick: closeModal }),
     el('button', { type: 'submit', class: 'btn primary', text: 'Guardar' }),
   ];
   openModal(isNew ? 'Nueva tarea' : 'Editar tarea', body, foot, () => {
-    if (!title.value.trim()) { title.focus(); return; }
+    if (!title.value.trim()) { title.focus(); errBox.textContent = 'Escribe un título.'; return; }
     let st = start.value, dt = date.value;
+    if (kind === 'block' && (!dt || !st)) { errBox.textContent = 'Un bloqueo necesita día y hora.'; return; }
     if (dt && !st) st = '09:00';
     if (!dt) st = '';
     const wasDone = !!t?.done;
-    const saved = upsertTask({ id: t?.id, title: title.value.trim(), notes: notes.value, date: dt || null, start: st || null, duration: +dur.value, priority: prio, category: cat, due: due.value, done: done.checked, doneAt: done.checked ? (t?.doneAt || Date.now()) : null });
+    const saved = kind === 'block'
+      ? upsertTask({ id: t?.id, kind: 'block', title: title.value.trim(), notes: notes.value, date: dt, start: st, duration: +dur.value, priority: '', category: '', due: '', done: false })
+      : upsertTask({ id: t?.id, kind: 'task', title: title.value.trim(), notes: notes.value, date: dt || null, start: st || null, duration: +dur.value, priority: prio, category: cat, due: due.value, done: done.checked, doneAt: done.checked ? (t?.doneAt || Date.now()) : null });
     if (saved.google && wasDone !== done.checked && G.isSignedIn()) G.setTaskCompleted(saved.google.listId, saved.google.taskId, done.checked).catch(() => {});
     closeModal();
     if (dt && st && tab === 'week') goTo(parseYMD(dt));
   });
+  applyKind();
   if (preset.focusSchedule) setTimeout(() => date.focus(), 50); else if (isNew) setTimeout(() => title.focus(), 50);
 }
 
@@ -822,15 +844,16 @@ function taskSheet(id) {
   if (t.category) meta.push(el('span', { class: `tag cat-${t.category}`, text: t.category }));
   if (t.due) meta.push(el('span', { class: 'tag', text: 'Fecha límite: ' + fmtDay(t.due) }));
   if (t.google) meta.push(el('span', { class: 'tag', text: 'Google Tasks' }));
+  const blkKind = isBlock(t);
   const body = [
-    el('div', { class: 'sheet-cat' }, el('i', { class: `sw ${t.done ? 'done' : 'task'}` }), t.done ? 'Tarea hecha' : 'Tarea pendiente'),
+    el('div', { class: 'sheet-cat' }, el('i', { class: `sw ${blkKind ? 'block' : t.done ? 'done' : 'task'}` }), blkKind ? '🔒 Bloqueo de agenda' : t.done ? 'Tarea hecha' : 'Tarea pendiente'),
     el('div', { class: 'sheet-when', text: sched ? `${fmtDayLong(t.date)} · ${t.start}–${endHM(hm2min(t.start) + (t.duration || 60))} (${fmtDur(t.duration || 60)})` : `Sin hora en el calendario · ${fmtDur(t.duration || 60)}` }),
     meta.length ? el('div', { class: 'meta' }, meta) : null,
     t.notes ? el('div', { class: 'sheet-desc', text: t.notes }) : null,
     el('div', { class: 'sheet-actions' },
-      act(t.done ? '↺ Marcar pendiente' : '✓ Marcar hecha', () => { toggleDone(t); taskSheet(id); }, t.done ? '' : 'primary'),
+      blkKind ? null : act(t.done ? '↺ Marcar pendiente' : '✓ Marcar hecha', () => { toggleDone(t); taskSheet(id); }, t.done ? '' : 'primary'),
       act(sched ? '⇄ Mover: tocar nuevo hueco' : '📅 Elegir hueco en el calendario', () => { closeModal(); enterMoveMode(id); }),
-      act('⚡ Próximo hueco libre', () => {
+      blkKind ? null : act('⚡ Próximo hueco libre', () => {
         const slot = findSlot(t.duration || 60, id);
         if (!slot) return toast('No hay huecos libres en 60 días');
         upd(slot, `→ ${fmtDay(slot.date)} ${slot.start}`); if (tab === 'week') goTo(parseYMD(slot.date));
@@ -839,7 +862,8 @@ function taskSheet(id) {
       sched ? el('div', { class: 'sheet-row' },
         act('− 15 min', () => upd({ start: min2hm(Math.max(0, hm2min(t.start) - 15)) })), act('+ 15 min', () => upd({ start: min2hm(Math.min(1425, hm2min(t.start) + 15)) })),
         act('Más corta', () => upd({ duration: Math.max(15, (t.duration || 60) - 15) })), act('Más larga', () => upd({ duration: (t.duration || 60) + 15 }))) : null,
-      sched ? act('Quitar del calendario', () => upd({ date: null, start: null }, 'Vuelve a «Por programar»')) : null),
+      blkKind ? act('🗑 Eliminar bloqueo', () => { deleteTask(id); closeModal(); toast('Bloqueo eliminado'); }, 'danger')
+        : sched ? act('Quitar del calendario', () => upd({ date: null, start: null }, 'Vuelve a «Por programar»')) : null),
     el('div', { class: 'muted', text: 'Consejo: en el calendario también puedes mantener pulsada la tarea y arrastrarla, o estirarla desde su borde inferior.' }),
   ];
   openModal(t.title || '(sin título)', body, [
@@ -881,8 +905,23 @@ const placeAt = (e) => {
   upsertTask({ id: t.id, date: col.dataset.date, start: min2hm(m) });
   toast(`“${t.title}” → ${fmtDay(col.dataset.date)} ${min2hm(m)}`);
 };
-$('#cal-grid').addEventListener('pointerdown', (e) => { if (moveMode) e.stopPropagation(); }, true);
-$('#cal-grid').addEventListener('click', placeAt, true);
+// En modo mover se coloca con el propio toque (pointerup), no con «click»: iOS no siempre envía click sobre zonas que no son botones
+let mvDown = null, swallowAt = 0;
+$('#cal-grid').addEventListener('pointerdown', (e) => {
+  swallowAt = 0; // un toque nuevo: el «click fantasma» del anterior ya no va a llegar
+  if (!moveMode) return; e.stopPropagation(); mvDown = { x: e.clientX, y: e.clientY, t: Date.now() };
+}, true);
+$('#cal-grid').addEventListener('pointerup', (e) => {
+  if (!moveMode || !mvDown) return;
+  const moved = Math.hypot(e.clientX - mvDown.x, e.clientY - mvDown.y);
+  mvDown = null;
+  if (moved > 12) return; // era un desplazamiento, no un toque
+  swallowAt = Date.now(); // el «click» que sigue a este toque no debe abrir nada
+  placeAt(e);
+}, true);
+$('#cal-grid').addEventListener('click', (e) => {
+  if (moveMode || Date.now() - swallowAt < 700) { e.stopPropagation(); e.preventDefault(); swallowAt = 0; }
+}, true);
 document.addEventListener('keydown', (e) => { if (moveMode && e.key === 'Escape') exitMoveMode(); });
 
 // ---------- Ajustes ----------
@@ -1294,7 +1333,19 @@ $('#zoom-in').onclick = () => applyZoom(hourPx() * 1.25);
 $('#zoom-out').onclick = () => applyZoom(hourPx() / 1.25);
 $('#tray-head').onclick = () => { const t = $('#tray'); t.classList.toggle('closed'); lsSet('cfs.tray', t.classList.contains('closed') ? '0' : '1'); };
 if (lsGet('cfs.tray') === '0') $('#tray').classList.add('closed');
-$('#fab').onclick = () => taskModal(null);
+$('#add-btn').onclick = () => taskModal(null);
+// iOS: impedir el zoom de toda la página con dos dedos (solo se hace zoom de horas dentro del calendario)
+for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+// deslizar a izquierda/derecha sobre el calendario para cambiar de semana (o de días)
+{
+  const sc = $('#cal-scroll'); let sw = null;
+  sc.addEventListener('touchstart', (e) => { sw = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() } : null; }, { passive: true });
+  sc.addEventListener('touchend', (e) => {
+    if (!sw || drag || pressSt || Date.now() - dragEndedAt < 800) { sw = null; return; }
+    const t = e.changedTouches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y, dt = Date.now() - sw.t; sw = null;
+    if (!drag && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 2 && dt < 700) step(dx < 0 ? 1 : -1);
+  }, { passive: true });
+}
 // pellizcar para hacer zoom de horas (2 dedos sobre el calendario)
 {
   const sc = $('#cal-scroll');

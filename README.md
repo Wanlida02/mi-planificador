@@ -85,6 +85,8 @@ Haz lo mismo en cada dispositivo (pegar el Client ID y conectar). A partir de ah
 |---|---|---|
 | Crear tarea en un hueco | Arrastra en un hueco vacío o haz doble clic | Doble toque en el hueco |
 | Agenda de hoy y mañana | Pestaña **Hoy** | Pestaña **Hoy** |
+| Bloquear agenda (p. ej. llevar a Luna al cole) | **＋ Nuevo** → «🔒 Bloqueo de agenda» | Igual |
+| Cambiar de semana | ‹ › o ← → | ‹ › o deslizar a izquierda/derecha |
 | Ver detalle (evento o tarea) | Clic | Un toque |
 | Mover tarea | Arrastrar, o detalle → **⇄ Mover** y clic en el hueco | Mantener pulsado y arrastrar, o detalle → **⇄ Mover** y tocar el hueco |
 | Ajustes rápidos | Detalle: día antes/después, ±15 min, más corta/larga, próximo hueco | Igual |

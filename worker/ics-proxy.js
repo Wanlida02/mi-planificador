@@ -74,6 +74,18 @@ async function listCalendars(env) {
     .map((x) => ({ href: new URL(xmlUnescape(pick(x, 'href')), home).toString(), name: xmlUnescape(pick(x, 'displayname')) }));
 }
 
+// Cloudflare debilita el ETag de las respuestas que comprime (W/"…") y iCloud no lo acepta en If-Match:
+// pedimos el ETag con PROPFIND (va en el cuerpo XML, que no se toca) y, si no, quitamos el «W/».
+const cleanEtag = (e) => (e || '').trim().replace(/^W\//i, '');
+async function strongEtag(env, href, fallback) {
+  try {
+    const r = await dav(env, 'PROPFIND', href, '<d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>', { Depth: '0' });
+    const e = xmlUnescape(pick(await r.text(), 'getetag'));
+    if (e) return cleanEtag(e);
+  } catch (err) { if (err instanceof Response) throw err; }
+  return cleanEtag(fallback);
+}
+
 // iCloud no admite buscar por UID (responde 412). Probamos: 1) GET directo {uid}.ics; 2) rango de fechas alrededor de `near`.
 const davStamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
 async function findByUid(env, uid, near) {
@@ -81,7 +93,7 @@ async function findByUid(env, uid, near) {
   for (const cal of cals) {
     const href = cal.href + encodeURIComponent(uid) + '.ics';
     const r = await dav(env, 'GET', href, undefined, { 'Content-Type': 'text/calendar' });
-    if (r.ok) { const ics = await r.text(); if (ics.includes(uid)) return { href, etag: r.headers.get('etag') || '', ics, calendar: cal.name }; }
+    if (r.ok) { const ics = await r.text(); if (ics.includes(uid)) return { href, etag: await strongEtag(env, href, r.headers.get('etag')), ics, calendar: cal.name }; }
   }
   if (!near) return null;
   const t = new Date(near).getTime();
@@ -92,7 +104,7 @@ async function findByUid(env, uid, near) {
     for (const x of responses(await r.text())) {
       const data = xmlUnescape(pick(x, 'calendar-data'));
       if (!new RegExp(`\\nUID:${uid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\r?\\n`).test('\n' + data.replace(/\r\n/g, '\n') + '\n')) continue;
-      return { href: new URL(xmlUnescape(pick(x, 'href')), cal.href).toString(), etag: xmlUnescape(pick(x, 'getetag')), ics: data, calendar: cal.name };
+      return { href: new URL(xmlUnescape(pick(x, 'href')), cal.href).toString(), etag: cleanEtag(xmlUnescape(pick(x, 'getetag'))), ics: data, calendar: cal.name };
     }
   }
   return null;
@@ -183,10 +195,14 @@ async function caldavRoute(request, env, path) {
   if (path === '/caldav/move' && request.method === 'POST') {
     const b = await request.json();
     if (!b.uid || !b.start || !b.end) return [400, { error: 'Faltan datos (uid, start, end)' }];
-    const found = await findByUid(env, b.uid, b.near || b.occurrence || b.start);
-    if (!found) return [404, { error: 'No encuentro ese evento en tu iCloud' }];
-    const ics = moveInIcs(found.ics, b);
-    const r = await dav(env, 'PUT', found.href, ics, { 'Content-Type': 'text/calendar; charset=utf-8', ...(found.etag ? { 'If-Match': found.etag } : {}) });
+    let r, found;
+    for (let attempt = 0; attempt < 2; attempt++) { // si iCloud dice que cambió, se relee y se reintenta una vez
+      found = await findByUid(env, b.uid, b.near || b.occurrence || b.start);
+      if (!found) return [404, { error: 'No encuentro ese evento en tu iCloud' }];
+      const ics = moveInIcs(found.ics, b);
+      r = await dav(env, 'PUT', found.href, ics, { 'Content-Type': 'text/calendar; charset=utf-8', ...(found.etag ? { 'If-Match': found.etag } : {}) });
+      if (r.status !== 412) break;
+    }
     if (r.status === 412) return [409, { error: 'El evento cambió en iCloud mientras lo movías. Vuelve a intentarlo.' }];
     if (!r.ok) return [502, { error: `iCloud respondió ${r.status} al guardar: ${(await r.text()).slice(0, 200)}` }];
     return [200, { ok: true, calendar: found.calendar }];

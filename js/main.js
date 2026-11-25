@@ -674,7 +674,11 @@ function settingsModal() {
       localBtn, localStatus,
       el('div', { class: 'row2' }, field('Recordarme actualizarla cada (días)', reminder), el('span')),
       el('details', {}, el('summary', { class: 'muted', text: 'Alternativa: enlace de iCloud Drive (actualización diaria)' }),
-        field('Enlace de iCloud Drive al Excel', excelLink), linkBtn, linkStatus),
+        field('Enlace de iCloud Drive al Excel', excelLink), el('div', { class: 'seg' }, linkBtn,
+          el('button', { type: 'button', class: 'btn small', text: '🔍 Ver respuesta del proxy', onclick: () => {
+            if (!proxy.value.trim() || !excelLink.value.trim()) return toast('Pega antes el proxy y el enlace');
+            window.open(shareUrl(proxy.value, excelLink.value), '_blank');
+          } })), linkStatus),
       el('div', { class: 'row2' }, field('Mis iniciales', initials), el('span')),
       el('div', { class: 'row2' }, field('Viaje: desde', tS), field('Viaje: hasta', tE)),
       el('div', { class: 'row2' }, field('Día suelto: desde', dS), field('Día suelto: hasta', dE))),
@@ -728,12 +732,16 @@ const lastExcelCheck = () => { try { return +localStorage.getItem(EXCEL_KEY) || 
 const excelMsg = (n, name) => `✓ ${n.work} días de trabajo, ${n.fest} festivos (${n.years.join(', ')})${n.cancelled ? ` · ${n.cancelled} cancelados (tachados) ignorados` : ''} — “${name}”, ${new Date().toLocaleString('es-ES')}.`;
 
 /** Descarga el Excel desde el enlace de iCloud Drive (vía proxy). Una vez al día salvo force. */
+const shareUrl = (proxy, link) => `${proxy.trim().replace(/[?&]$/, '')}${proxy.includes('?') ? '&' : '?'}share=${encodeURIComponent(link.trim())}`;
 async function refreshExcel(force = false) {
   const { excelLink, proxy } = state.settings;
   if (!excelLink || !proxy) return null;
   if (!force && Date.now() - lastExcelCheck() < 20 * 3600 * 1000) return null;
-  const url = `${proxy.replace(/[?&]$/, '')}${proxy.includes('?') ? '&' : '?'}share=${encodeURIComponent(excelLink)}`;
-  const r = await fetch(url, { cache: 'no-store' });
+  const url = shareUrl(proxy, excelLink);
+  if (!/^https:\/\//i.test(proxy)) throw new Error('La URL del proxy debe empezar por https://');
+  let r;
+  try { r = await fetch(url, { cache: 'no-store' }); }
+  catch (e) { throw new Error(`No hay respuesta válida del proxy (${e.message}). Pulsa «🔍 Ver respuesta del proxy» para ver el error real.`); }
   if (!r.ok) throw new Error(`No se pudo descargar el Excel: ${(await r.text()).slice(0, 160)}`);
   const name = decodeURIComponent((excelLink.split('#')[1] || 'Programación Anual')).replace(/_/g, ' ');
   const n = await importExcel(await r.arrayBuffer(), name);

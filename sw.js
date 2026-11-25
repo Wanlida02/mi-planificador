@@ -1,10 +1,10 @@
 // Service worker: la app se guarda completa en el dispositivo y se abre desde ahí al instante
 // (sin esperar a la red). Al publicar una versión nueva se cambia VERSION: se descarga en segundo
 // plano y la página se recarga una vez para usarla.
-const VERSION = 'v9';
+const VERSION = 'v10';
 const CACHE = 'planificador-' + VERSION;
 const APP = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-512.png',
-  'js/main.js', 'js/store.js', 'js/util.js', 'js/feeds.js', 'js/ics.js', 'js/google.js', 'js/programacion.js', 'js/localfile.js'];
+  'js/main.js', 'js/store.js', 'js/util.js', 'js/feeds.js', 'js/ics.js', 'js/google.js', 'js/programacion.js', 'js/localfile.js', 'js/vacaciones.js'];
 const XLSX = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
 
 self.addEventListener('install', (e) => {

@@ -1,8 +1,9 @@
-import { state, save, onChange, upsertTask, deleteTask, updateSettings, setWork, liveTasks, mergeRemote, exportable, CATEGORIES, PRIORITIES, uid, liveProjects, upsertProject, deleteProject, PROJECT_COLORS } from './store.js';
+import { state, save, onChange, upsertTask, deleteTask, updateSettings, setWork, setVac, liveTasks, mergeRemote, exportable, CATEGORIES, PRIORITIES, uid, liveProjects, upsertProject, deleteProject, PROJECT_COLORS } from './store.js';
 import { parseProgramacion } from './programacion.js';
 import { refreshFeeds, feedEvents, feedStatus, feedProblems, clearFeedCache } from './feeds.js';
 import * as G from './google.js';
 import * as LF from './localfile.js';
+import { parseVacations, vacationOn, summary as vacSummary } from './vacaciones.js';
 import { normalizeClientId, isCalendarLink, proxyError, feedUrlError, el, toast, toYMD, fmtDayLong, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
 
 const $ = (s) => document.querySelector(s);
@@ -116,6 +117,9 @@ const projColor = (pr) => `var(--p-${pr && !pr.deleted ? pr.color || 'gray' : 'g
 /** Bloques ocupados/visibles de un día. */
 function itemsForDay(dateStr, fe) {
   const timed = [], allDay = [];
+  const vd = state.settings.vacShow !== false ? vacationOn(state.vac, dateStr) : null;
+  // los festivos que ya trae el Excel no se repiten
+  if (vd && !(vd.kind === 'vacfest' && state.work.events.some((w) => w.date === dateStr && w.kind === 'festivo'))) allDay.push({ type: vd.kind, title: vd.title, date: dateStr, allDay: true, ref: { id: 'vac:' + dateStr, vac: vd } });
   for (const w of state.work.events) {
     if (w.date !== dateStr) continue;
     if (w.kind === 'festivo') allDay.push({ type: 'festivo', title: w.title, date: dateStr, ref: w });
@@ -182,7 +186,7 @@ function renderWeek() {
   const perDay = days.map((d) => itemsForDay(toYMD(d), fe));
 
   $('#cal-allday').replaceChildren(el('div', { class: 'gutter' }), ...perDay.map((p) =>
-    el('div', { class: 'ad' }, p.allDay.map((a) => el('button', { type: 'button', class: `chip ${a.type}`, title: a.title, text: (a.type === 'task' ? '☐ ' : '') + a.title, onclick: () => detailSheet(a) })))));
+    el('div', { class: 'ad' }, p.allDay.map((a) => el('button', { type: 'button', class: `chip ${a.type}${conflictIds.has(a.ref?.id) ? ' conflict' : ''}`, title: a.title, text: (a.type === 'task' ? '☐ ' : '') + a.title, onclick: () => detailSheet(a) })))));
 
   const grid = $('#cal-grid');
   const hours = el('div', { class: 'hours' });
@@ -311,6 +315,8 @@ function computeConflicts() {
   const wk = (w) => ({ id: w.id, title: w.title, detail: w.detail, start: w.start, end: w.end });
   work.forEach((w, i) => {
     const ws = at(w.date, w.start), we = at(w.date, w.end);
+    const vd = vacationOn(state.vac, w.date);
+    if (vd) out.push({ key: `${w.id}|vac:${w.date}`, date: w.date, kind: 'vacaciones', work: wk(w), other: { id: 'vac:' + w.date, type: vd.kind, title: vd.title, start: parseYMD(w.date), end: addDays(parseYMD(w.date), 1), allDay: true } });
     for (const f of fe) if (f.start < we && f.end > ws) out.push({ key: `${w.id}|${f.id}`, date: w.date, kind: 'cita', work: wk(w), other: { id: f.id, type: f.category, title: f.title, start: f.start, end: f.end } });
     for (const t of tasks) {
       if (t.date !== w.date) continue;
@@ -362,12 +368,12 @@ const hmOf = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinu
 function conflictsModal() {
   const dismissed = readSet(DISMISS_KEY);
   const rows = conflicts.map((c) => {
-    const label = { cita: c.other.type === 'familia' ? 'Luna / familia' : 'Personal', tarea: isBlock(c.other.task) ? 'Bloqueo de agenda' : isProj(c.other.task) ? 'Proyecto' : 'Tarea', trabajo: 'Otro trabajo' }[c.kind];
+    const label = { cita: c.other.type === 'familia' ? 'Luna / familia' : 'Personal', tarea: isBlock(c.other.task) ? 'Bloqueo de agenda' : isProj(c.other.task) ? 'Proyecto' : 'Tarea', trabajo: 'Otro trabajo', vacaciones: 'Día libre' }[c.kind];
     const row = el('div', { class: `conflict-row k-${c.other.type}` },
       el('div', { class: 'cr-date', text: fmtDay(c.date) }),
       el('div', { class: 'cr-body' },
         el('div', {}, el('b', { text: `${c.work.title}` }), ` ${c.work.detail || ''} · ${c.work.start}–${c.work.end}`),
-        el('div', {}, '↔ ', el('b', { text: c.other.title }), ` · ${hmOf(c.other.start)}–${hmOf(c.other.end)} `, el('span', { class: 'tag', text: label }))),
+        el('div', {}, '↔ ', el('b', { text: c.other.title }), c.other.allDay ? ' · todo el día ' : ` · ${hmOf(c.other.start)}–${hmOf(c.other.end)} `, el('span', { class: 'tag', text: label }))),
       el('div', { class: 'cr-actions' },
         el('button', { type: 'button', class: 'btn small', text: 'Ver', onclick: () => { closeModal(); switchTab('week'); goTo(parseYMD(c.date)); } }),
         c.kind === 'tarea' ? el('button', { type: 'button', class: 'btn small', text: '⚡ Mover', title: 'Mover la tarea al próximo hueco libre', onclick: () => {
@@ -1048,7 +1054,7 @@ function taskModal(t, preset = {}) {
   if (preset.focusSchedule) setTimeout(() => date.focus(), 50); else if (isNew && kind !== 'project') setTimeout(() => title.focus(), 50);
 }
 
-const CAT_LABEL = { trabajo: 'Trabajo · programación anual', familia: 'Luna / familia', personal: 'Personal', festivo: 'Festivo', task: 'Tarea' };
+const CAT_LABEL = { trabajo: 'Trabajo · programación anual', familia: 'Luna / familia', personal: 'Personal', festivo: 'Festivo', task: 'Tarea', vac: 'Calendario de vacaciones', vacap: 'Calendario de vacaciones', vacfest: 'Calendario de vacaciones' };
 const endHM = (e) => (e >= 1440 ? '24:00' : min2hm(e));
 
 /** Detalle de un evento del calendario (iCloud, trabajo, festivo) o de una tarea. */
@@ -1086,6 +1092,7 @@ function detailSheet(it) {
     body.push(el('div', { class: 'muted', text: 'Para moverlo desde aquí, activa «Mover eventos de iCloud» en Ajustes.' }));
   }
   if (it.type === 'trabajo') body.push(el('div', { class: 'muted', text: 'Viene de la programación anual (Excel): no se edita aquí.' }));
+  if (f.vac) body.push(el('div', { class: 'muted', text: 'Viene de tu calendario de vacaciones (se cambia allí y se vuelve a importar). Solo se cruza con el trabajo: si te programan trabajo este día, sale en los avisos de solapes.' }));
   openModal(it.title, body, [
     it.type !== 'festivo' ? el('button', { type: 'button', class: 'btn', text: '+ Tarea relacionada', onclick: () => taskModal(null, { title: it.title, due: it.date }) }) : null,
     el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal }),
@@ -1258,6 +1265,19 @@ function settingsModal() {
     catch (e) { linkStatus.textContent = '⚠︎ ' + e.message; }
   } });
 
+  // vacaciones
+  const vacStatus = el('div', { class: 'muted' });
+  const vacMsg = () => { const v = vacSummary(state.vac); vacStatus.textContent = state.vac.importedAt ? `✓ ${v.v} días de vacaciones, ${v.a} de asuntos propios y ${v.h} festivos/días libres — importado ${new Date(state.vac.importedAt).toLocaleString('es-ES')}.` : 'Aún no has importado tu calendario de vacaciones.'; };
+  vacMsg();
+  const doVac = (text, name) => {
+    try { const r = parseVacations(text); setVac({ ...r, fileName: name }); vacMsg(); const n = conflicts.filter((c) => c.kind === 'vacaciones').length; toast(n ? `⚠︎ ${n} día${n > 1 ? 's' : ''} de trabajo caen en días libres` : '✓ Vacaciones importadas: ningún día de trabajo cae en un día libre', 6000); }
+    catch (e) { vacStatus.textContent = '⚠︎ ' + e.message; }
+  };
+  const vacFile = el('input', { type: 'file', accept: '.json,.ics,application/json,text/calendar' });
+  vacFile.addEventListener('change', async () => { const f = vacFile.files[0]; if (f) doVac(await f.text(), f.name); vacFile.value = ''; });
+  const vacPaste = el('textarea', { placeholder: 'O pega aquí lo que copia «📤 Exportar al planificador»', style: { minHeight: '60px' } });
+  const vacPasteBtn = el('button', { type: 'button', class: 'btn small', text: 'Importar lo pegado', onclick: () => { if (vacPaste.value.trim()) { doVac(vacPaste.value, 'texto pegado'); vacPaste.value = ''; } } });
+  const vacShow = el('input', { type: 'checkbox' }); vacShow.checked = s.vacShow !== false;
   const cdToken = el('input', { value: s.caldavToken || '', placeholder: 'código privado (el mismo que PLANNER_TOKEN en Cloudflare)', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
   const cdStatus = el('div', { class: 'muted', text: s.caldavToken ? 'Configurado. Pulsa «Probar conexión» para comprobarlo.' : 'Sin configurar: los eventos de iCloud solo se pueden ver.' });
   const cdGen = el('button', { type: 'button', class: 'btn small', text: '🎲 Generar código', onclick: () => {
@@ -1313,6 +1333,10 @@ function settingsModal() {
       el('div', { class: 'row2' }, field('Mis iniciales', initials), el('span')),
       el('div', { class: 'row2' }, field('Viaje: desde', tS), field('Viaje: hasta', tE)),
       el('div', { class: 'row2' }, field('Día suelto: desde', dS), field('Día suelto: hasta', dE))),
+    el('div', { class: 'section' }, el('h3', { text: '🏖️ Vacaciones y días libres' }),
+      el('div', { class: 'muted' }, 'En tu artefacto ', el('a', { href: 'https://claude.ai/artifact/DbUR5ckATSEYribZjHM5L8', target: '_blank', rel: 'noopener', text: '«Calendario de vacaciones»' }), ' pulsa «📤 Exportar al planificador» y elige aquí el archivo (o pega el texto). Solo se cruza con el trabajo: te avisa si te ponen a trabajar en un día libre.'),
+      vacFile, el('div', { class: 'seg' }, vacPaste), vacPasteBtn, vacStatus,
+      el('label', { class: 'chk', style: { color: 'var(--text)' } }, vacShow, ' Mostrar vacaciones y festivos en el calendario')),
     el('div', { class: 'section' }, el('h3', { text: '📅 Calendarios de iCloud' }),
       el('div', { class: 'muted' }, 'En el iPhone: Calendario → Calendarios → (i) junto a “Familia” → activa “Calendario público” → Compartir enlace. Repite con “Calendar”. Pega aquí los enlaces.'),
       feedList,
@@ -1354,7 +1378,7 @@ function settingsModal() {
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
-      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
+      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), vacShow: vacShow.checked, caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
     });

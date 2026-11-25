@@ -65,6 +65,9 @@ Los enlaces públicos solo permiten **ver**. Para **mover** eventos, el worker s
 
 A partir de ahí, los eventos de iCloud se mueven igual que las tareas: arrastrándolos, con **⇄ Mover** en su detalle o con los botones día antes/después y ±15 min/±1 h. En los eventos que se repiten solo se mueve ese día. El cambio se guarda en tu iCloud. El enlace público tarda unos minutos en reflejarlo; mientras tanto la app lo muestra ya movido, con borde punteado.
 
+### 3c. Vacaciones (opcional)
+En tu artefacto «Calendario de vacaciones» pulsa **📤 Exportar al planificador**: descarga `vacaciones-planificador.json` y además lo copia. En el planificador: ⚙︎ → **🏖️ Vacaciones y días libres** → elige el archivo (o pega el texto). Solo se cruza con el trabajo: si la programación te pone a trabajar en vacaciones, asuntos propios, festivo o día libre SENASA, sale en los avisos de solapes. Cuando cambies tus vacaciones, vuelve a exportar e importar.
+
 ### 4. Google (Tasks + sincronización)
 Necesitas un *Client ID* de OAuth propio (gratuito):
 

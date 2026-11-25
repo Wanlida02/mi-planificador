@@ -10,6 +10,7 @@ export const PRIORITIES = [
 const defaults = () => ({
   tasks: {},
   projects: {},
+  vac: { entries: {}, workday: 450, holidays: { nacional: [], local: [], senasa: [] }, importedAt: 0, fileName: '' },
   work: { events: [], fileName: '', importedAt: 0 },
   settings: {
     feeds: [], proxy: '', initials: 'FS', dayStart: 6, dayEnd: 23,
@@ -23,7 +24,7 @@ export const state = load();
 function load() {
   try {
     const s = JSON.parse(localStorage.getItem(KEY));
-    if (s) { const d = defaults(); return { ...d, ...s, projects: s.projects || {}, settings: { ...d.settings, ...s.settings }, work: { ...d.work, ...s.work } }; }
+    if (s) { const d = defaults(); return { ...d, ...s, projects: s.projects || {}, vac: { ...d.vac, ...(s.vac || {}) }, settings: { ...d.settings, ...s.settings }, work: { ...d.work, ...s.work } }; }
   } catch {}
   return defaults();
 }
@@ -71,6 +72,7 @@ export function updateSettings(patch) {
   save();
 }
 export function setWork(work) { state.work = { ...work }; save(); }
+export function setVac(vac) { state.vac = { ...vac, importedAt: Date.now() }; save(); }
 
 /** Fusión con datos remotos (Drive): por tarea gana la última modificación. */
 export function mergeRemote(remote) {
@@ -84,6 +86,7 @@ export function mergeRemote(remote) {
     const lp = state.projects[id];
     if (!lp || (rp.updatedAt || 0) > (lp.updatedAt || 0)) { state.projects[id] = rp; changed = true; }
   }
+  if ((remote.vac?.importedAt || 0) > (state.vac?.importedAt || 0)) { state.vac = remote.vac; changed = true; }
   if ((remote.work?.importedAt || 0) > (state.work.importedAt || 0)) { state.work = remote.work; changed = true; }
   if ((remote.settingsUpdatedAt || 0) > (state.settingsUpdatedAt || 0)) {
     state.settings = { ...state.settings, ...remote.settings }; state.settingsUpdatedAt = remote.settingsUpdatedAt; changed = true;

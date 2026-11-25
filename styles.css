@@ -8,6 +8,7 @@
   --task-bg: #d3e6ff; --task-bd: #5f9be8; --task-ink: #173f73;
   --done-bg: #d2f0d5; --done-bd: #5fbf6c; --done-ink: #1d5326;
   --festivo-bg: #fde2e1; --festivo-ink: #8d2a26;
+  --vac-bg: #dbeafe; --vac-ink: #1d4f91; --vac-bd: #2a7de1; --vacap-bg: #fdebd0; --vacap-ink: #7a4a0e; --vacap-bd: #e08a1e; --vacf-bg: #def5e7; --vacf-ink: #1b6b3c; --vacf-bd: #1faa59;
   --block-a: #e4e4ea; --block-b: #d6d6de; --block-bd: #7d7d8a; --block-ink: #2c2c35;
   --p-aqua: #00b894; --p-violet: #6a4ce2; --p-yellow: #f2a600; --p-magenta: #ee7fac; --p-green: #008a17; --p-gray: #7d8590;
   --hour: 48px;
@@ -19,7 +20,7 @@
   :root:not([data-theme="light"]) {
     --bg: #18191c; --surface: #212227; --surface-2: #2a2b31; --line: #34353c; --line-soft: #2b2c32;
     --text: #ecedf0; --muted: #9a9ca5; --accent: #6d9bff; --accent-ink: #0d1530; --today: #2c2a22; --now: #ff6b6f;
-    --festivo-bg: #4a2624; --festivo-ink: #ffc9c5; --block-a: #3a3b43; --block-b: #30313a; --block-bd: #8a8a98; --block-ink: #e6e6ee; --p-aqua: #00a888; --p-violet: #9887ef; --p-yellow: #d28e05; --p-magenta: #e24d8b; --p-green: #0aac23; --p-gray: #9aa0a8;
+    --festivo-bg: #4a2624; --festivo-ink: #ffc9c5; --vac-bg: #1f3556; --vac-ink: #cfe0fb; --vac-bd: #5b9cf0; --vacap-bg: #4a3517; --vacap-ink: #fbdcae; --vacap-bd: #f0a94a; --vacf-bg: #183d29; --vacf-ink: #bdeccf; --vacf-bd: #2a9a5e; --block-a: #3a3b43; --block-b: #30313a; --block-bd: #8a8a98; --block-ink: #e6e6ee; --p-aqua: #00a888; --p-violet: #9887ef; --p-yellow: #d28e05; --p-magenta: #e24d8b; --p-green: #0aac23; --p-gray: #9aa0a8;
     --shadow: 0 6px 24px rgba(0,0,0,.5);
     color-scheme: dark;
   }
@@ -27,7 +28,7 @@
 :root[data-theme="dark"] {
   --bg: #18191c; --surface: #212227; --surface-2: #2a2b31; --line: #34353c; --line-soft: #2b2c32;
   --text: #ecedf0; --muted: #9a9ca5; --accent: #6d9bff; --accent-ink: #0d1530; --today: #2c2a22; --now: #ff6b6f;
-  --festivo-bg: #4a2624; --festivo-ink: #ffc9c5; --block-a: #3a3b43; --block-b: #30313a; --block-bd: #8a8a98; --block-ink: #e6e6ee; --p-aqua: #00a888; --p-violet: #9887ef; --p-yellow: #d28e05; --p-magenta: #e24d8b; --p-green: #0aac23; --p-gray: #9aa0a8;
+  --festivo-bg: #4a2624; --festivo-ink: #ffc9c5; --vac-bg: #1f3556; --vac-ink: #cfe0fb; --vac-bd: #5b9cf0; --vacap-bg: #4a3517; --vacap-ink: #fbdcae; --vacap-bd: #f0a94a; --vacf-bg: #183d29; --vacf-ink: #bdeccf; --vacf-bd: #2a9a5e; --block-a: #3a3b43; --block-b: #30313a; --block-bd: #8a8a98; --block-ink: #e6e6ee; --p-aqua: #00a888; --p-violet: #9887ef; --p-yellow: #d28e05; --p-magenta: #e24d8b; --p-green: #0aac23; --p-gray: #9aa0a8;
   --shadow: 0 6px 24px rgba(0,0,0,.5);
   color-scheme: dark;
 }
@@ -106,6 +107,10 @@ main { flex: 1; min-height: 0; display: flex; }
 .cal-allday .gutter { font-size: 11px; color: var(--muted); padding: 4px; text-align: right; }
 .chip { font-size: 12px; padding: 1px 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chip.festivo { background: var(--festivo-bg); color: var(--festivo-ink); }
+.chip.vac { background: var(--vac-bg); color: var(--vac-ink); }
+.chip.vacap { background: var(--vacap-bg); color: var(--vacap-ink); }
+.chip.vacfest { background: var(--vacf-bg); color: var(--vacf-ink); }
+.chip.conflict { box-shadow: inset 0 0 0 2px var(--now); }
 .chip.familia { background: var(--familia-bg); color: var(--familia-ink); }
 .chip.personal { background: var(--personal-bg); color: var(--personal-ink); }
 .cal-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; position: relative; -webkit-overflow-scrolling: touch; }
@@ -168,6 +173,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .sw.task { background: var(--task-bg); border-color: var(--task-bd); }
 .sw.done { background: var(--done-bg); border-color: var(--done-bd); }
 .sw.proj { background: color-mix(in srgb, var(--pc) 30%, var(--surface)); border-color: var(--pc); }
+.sw.vac { background: var(--vac-bg); border-color: var(--vac-bd); } .sw.vacap { background: var(--vacap-bg); border-color: var(--vacap-bd); } .sw.vacfest { background: var(--vacf-bg); border-color: var(--vacf-bd); }
 .sw.block { background: repeating-linear-gradient(135deg, var(--block-a) 0 3px, var(--block-b) 3px 6px); border-color: var(--block-bd); }
 
 /* ---------- Herramientas de vista, bandeja y botón flotante ---------- */
@@ -226,6 +232,9 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .ag-row.project { border-left-color: var(--pc); background: color-mix(in srgb, var(--pc) 14%, var(--surface)); }
 .ag-row.task.done { border-left-color: var(--done-bd); opacity: .7; }
 .ag-row.task.done .ti { text-decoration: line-through; }
+.ag-row.vac { border-left-color: var(--vac-bd); background: var(--vac-bg); color: var(--vac-ink); }
+.ag-row.vacap { border-left-color: var(--vacap-bd); background: var(--vacap-bg); color: var(--vacap-ink); }
+.ag-row.vacfest { border-left-color: var(--vacf-bd); background: var(--vacf-bg); color: var(--vacf-ink); }
 .ag-row.festivo { border-left-color: var(--festivo-ink); background: var(--festivo-bg); }
 .ag-row.now { box-shadow: 0 0 0 2px var(--now); }
 .ag-row.past { opacity: .55; }

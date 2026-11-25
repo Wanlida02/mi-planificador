@@ -24,6 +24,7 @@
     <h1 id="range-label"></h1>
   </div>
   <nav class="tabs" role="tablist">
+    <button class="tab" data-tab="today" role="tab">Hoy</button>
     <button class="tab active" data-tab="week" role="tab">Semana</button>
     <button class="tab" data-tab="backlog" role="tab">Pendientes <span class="count" id="pending-count"></span></button>
   </nav>
@@ -76,6 +77,15 @@
       <span><i class="sw task"></i>Tarea pendiente</span>
       <span><i class="sw done"></i>Tarea hecha</span>
     </div>
+  </section>
+
+  <section id="view-today" class="view">
+    <div class="today-bar">
+      <button class="btn icon" id="today-prev" aria-label="Día anterior">‹</button>
+      <button class="btn" id="today-now">Hoy</button>
+      <button class="btn icon" id="today-next" aria-label="Día siguiente">›</button>
+    </div>
+    <div class="agenda" id="agenda"></div>
   </section>
 
   <section id="view-backlog" class="view">

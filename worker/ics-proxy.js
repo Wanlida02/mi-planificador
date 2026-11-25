@@ -35,12 +35,166 @@ async function resolveShare(link) {
   return url;
 }
 
+
+// ---------------------------------------------------------------------------
+// CalDAV (mover eventos de iCloud). Requiere secretos en el worker:
+//   ICLOUD_USER (tu Apple ID), ICLOUD_APP_PASSWORD (contraseña específica de app)
+//   PLANNER_TOKEN (código privado que también pones en la app)
+// ---------------------------------------------------------------------------
+const DAV_ROOT = 'https://caldav.icloud.com';
+let homeCache = null;
+
+function davAuth(env) { return 'Basic ' + btoa(`${env.ICLOUD_USER}:${env.ICLOUD_APP_PASSWORD}`); }
+async function dav(env, method, url, body, headers = {}) {
+  const r = await fetch(url, { method, body, headers: { Authorization: davAuth(env), 'Content-Type': 'application/xml; charset=utf-8', ...headers } });
+  if (r.status === 401) throw new Response('iCloud rechazó el usuario o la contraseña específica de app (revisa los secretos del worker)', { status: 502 });
+  return r;
+}
+const xmlUnescape = (s) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#13;/g, '\r').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&');
+const tag = (name) => new RegExp(`<(?:[\\w-]+:)?${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:[\\w-]+:)?${name}>`, 'i');
+const responses = (xml) => xml.match(/<(?:[\w-]+:)?response[\s>][\s\S]*?<\/(?:[\w-]+:)?response>/gi) || [];
+const pick = (xml, name) => { const m = tag(name).exec(xml); return m ? m[1].trim() : ''; };
+
+async function calendarHome(env) {
+  if (homeCache) return homeCache;
+  let r = await dav(env, 'PROPFIND', DAV_ROOT + '/', '<d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>', { Depth: '0' });
+  const principal = pick(pick(await r.text(), 'current-user-principal'), 'href');
+  if (!principal) throw new Response('No encuentro tu cuenta en iCloud CalDAV', { status: 502 });
+  r = await dav(env, 'PROPFIND', new URL(principal, DAV_ROOT).toString(), '<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set/></d:prop></d:propfind>', { Depth: '0' });
+  const home = pick(pick(await r.text(), 'calendar-home-set'), 'href');
+  homeCache = new URL(home, DAV_ROOT).toString().replace(':443/', '/');
+  return homeCache;
+}
+
+async function listCalendars(env) {
+  const home = await calendarHome(env);
+  const r = await dav(env, 'PROPFIND', home, '<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:displayname/><d:resourcetype/><c:supported-calendar-component-set/></d:prop></d:propfind>', { Depth: '1' });
+  const xml = await r.text();
+  return responses(xml).filter((x) => /calendar/i.test(pick(x, 'resourcetype')) && /VEVENT/.test(x))
+    .map((x) => ({ href: new URL(xmlUnescape(pick(x, 'href')), home).toString(), name: xmlUnescape(pick(x, 'displayname')) }));
+}
+
+async function findByUid(env, uid) {
+  const q = `<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:prop-filter name="UID"><c:text-match collation="i;octet">${uid.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</c:text-match></c:prop-filter></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`;
+  for (const cal of await listCalendars(env)) {
+    const r = await dav(env, 'REPORT', cal.href, q, { Depth: '1' });
+    if (!r.ok && r.status !== 207) continue;
+    for (const x of responses(await r.text())) {
+      const data = xmlUnescape(pick(x, 'calendar-data'));
+      if (!data.includes(uid)) continue;
+      return { href: new URL(xmlUnescape(pick(x, 'href')), cal.href).toString(), etag: xmlUnescape(pick(x, 'getetag')), ics: data, calendar: cal.name };
+    }
+  }
+  return null;
+}
+
+// --- edición del ICS ---
+const pad2 = (n) => String(n).padStart(2, '0');
+const utcStamp = (d) => `${d.getUTCFullYear()}${pad2(d.getUTCMonth() + 1)}${pad2(d.getUTCDate())}T${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}${pad2(d.getUTCSeconds())}Z`;
+const dateStamp = (s) => s.replace(/-/g, '').slice(0, 8); // 'YYYY-MM-DD' → YYYYMMDD
+function unfold(t) { return t.replace(/\r\n/g, '\n').replace(/\n[ \t]/g, ''); }
+function splitEvents(ics) {
+  const lines = unfold(ics).split('\n');
+  const blocks = []; let cur = null; const outside = [];
+  for (const l of lines) {
+    if (l === 'BEGIN:VEVENT') { cur = [l]; continue; }
+    if (cur) { cur.push(l); if (l === 'END:VEVENT') { blocks.push(cur); outside.push({ ev: blocks.length - 1 }); cur = null; } continue; }
+    outside.push(l);
+  }
+  return { blocks, outside };
+}
+const prop = (block, name) => block.find((l) => l.split(/[;:]/)[0].toUpperCase() === name);
+function setTimes(block, { start, end, allDay }) {
+  const keep = block.filter((l) => !/^(DTSTART|DTEND|DURATION|DTSTAMP|LAST-MODIFIED|SEQUENCE)[;:]/i.test(l));
+  const seq = parseInt((prop(block, 'SEQUENCE') || 'SEQUENCE:0').split(':')[1], 10) || 0;
+  const now = utcStamp(new Date());
+  const times = allDay
+    ? [`DTSTART;VALUE=DATE:${dateStamp(start)}`, `DTEND;VALUE=DATE:${dateStamp(end)}`]
+    : [`DTSTART:${utcStamp(new Date(start))}`, `DTEND:${utcStamp(new Date(end))}`];
+  keep.splice(1, 0, ...times, `DTSTAMP:${now}`, `LAST-MODIFIED:${now}`, `SEQUENCE:${seq + 1}`);
+  return keep;
+}
+function zoned(y, mo, d, h, mi, s, tz) {
+  const guess = Date.UTC(y, mo, d, h, mi, s);
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const off = (t) => { const p = Object.fromEntries(fmt.formatToParts(new Date(t)).map((x) => [x.type, x.value])); return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - t; };
+    let t = guess - off(guess); t = guess - off(t); return t;
+  } catch { return guess; }
+}
+/** Instante (ms) de una línea DTSTART/RECURRENCE-ID, con o sin TZID. */
+function lineInstant(line) {
+  const [head, v] = [line.slice(0, line.lastIndexOf(':')), line.slice(line.lastIndexOf(':') + 1).trim()];
+  const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/.exec(v);
+  if (!m) return NaN;
+  const [, y, mo, d, h = 0, mi = 0, se = 0, z] = m;
+  if (!m[4]) return Date.UTC(+y, +mo - 1, +d);
+  if (z) return Date.UTC(+y, +mo - 1, +d, +h, +mi, +se);
+  const tz = (/TZID=([^;:]+)/i.exec(head) || [])[1];
+  return tz ? zoned(+y, +mo - 1, +d, +h, +mi, +se, tz.replace(/"/g, '')) : Date.UTC(+y, +mo - 1, +d, +h, +mi, +se);
+}
+function sameInstant(line, occ, allDay) {
+  if (!line) return false;
+  const v = line.split(':').pop().trim();
+  if (allDay) return v.slice(0, 8) === dateStamp(occ);
+  return lineInstant(line) === new Date(occ).getTime();
+}
+/** Mueve el evento (o solo una ocurrencia de una serie) y devuelve el ICS nuevo. */
+export function moveInIcs(ics, { uid, occurrence, start, end, allDay }) {
+  const { blocks, outside } = splitEvents(ics);
+  const mine = blocks.map((b, i) => ({ b, i })).filter(({ b }) => (prop(b, 'UID') || '').slice(4).trim() === uid);
+  if (!mine.length) throw new Response('Evento no encontrado en iCloud', { status: 404 });
+  const master = mine.find(({ b }) => !prop(b, 'RECURRENCE-ID'));
+  const recurring = master && prop(master.b, 'RRULE');
+  if (!recurring || !occurrence) {
+    const target = master || mine[0];
+    blocks[target.i] = setTimes(target.b, { start, end, allDay });
+  } else {
+    // solo esta ocurrencia: modificar la excepción si existe, o crear una nueva con RECURRENCE-ID
+    const ex = mine.find(({ b }) => sameInstant(prop(b, 'RECURRENCE-ID'), occurrence, allDay));
+    if (ex) blocks[ex.i] = setTimes(ex.b, { start, end, allDay });
+    else {
+      const base = master.b.filter((l) => !/^(RRULE|RDATE|EXDATE|EXRULE|RECURRENCE-ID)[;:]/i.test(l));
+      const rid = allDay ? `RECURRENCE-ID;VALUE=DATE:${dateStamp(occurrence)}` : `RECURRENCE-ID:${utcStamp(new Date(occurrence))}`;
+      const nb = setTimes(base, { start, end, allDay });
+      nb.splice(1, 0, rid);
+      blocks.push(nb);
+      const endCal = outside.lastIndexOf('END:VCALENDAR');
+      outside.splice(endCal, 0, { ev: blocks.length - 1 });
+    }
+  }
+  return outside.map((x) => (typeof x === 'string' ? x : blocks[x.ev].join('\r\n'))).join('\r\n').replace(/(\r\n)+$/, '') + '\r\n';
+}
+
+async function caldavRoute(request, env, path) {
+  if (!env.PLANNER_TOKEN || request.headers.get('X-Planner-Token') !== env.PLANNER_TOKEN) return [401, { error: 'Código privado incorrecto o sin configurar en el worker (PLANNER_TOKEN)' }];
+  if (!env.ICLOUD_USER || !env.ICLOUD_APP_PASSWORD) return [500, { error: 'Faltan los secretos ICLOUD_USER / ICLOUD_APP_PASSWORD en el worker' }];
+  if (path === '/caldav/calendars') return [200, { calendars: (await listCalendars(env)).map((c) => c.name) }];
+  if (path === '/caldav/move' && request.method === 'POST') {
+    const b = await request.json();
+    if (!b.uid || !b.start || !b.end) return [400, { error: 'Faltan datos (uid, start, end)' }];
+    const found = await findByUid(env, b.uid);
+    if (!found) return [404, { error: 'No encuentro ese evento en tu iCloud' }];
+    const ics = moveInIcs(found.ics, b);
+    const r = await dav(env, 'PUT', found.href, ics, { 'Content-Type': 'text/calendar; charset=utf-8', ...(found.etag ? { 'If-Match': found.etag } : {}) });
+    if (r.status === 412) return [409, { error: 'El evento cambió en iCloud mientras lo movías. Vuelve a intentarlo.' }];
+    if (!r.ok) return [502, { error: `iCloud respondió ${r.status} al guardar: ${(await r.text()).slice(0, 200)}` }];
+    return [200, { ok: true, calendar: found.calendar }];
+  }
+  return [404, { error: 'Ruta desconocida' }];
+}
+
 export default {
-  async fetch(request) {
-    const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS' };
+  async fetch(request, env = {}) {
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Planner-Token' };
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-    const params = new URL(request.url).searchParams;
+    const reqUrl = new URL(request.url);
+    const params = reqUrl.searchParams;
     try {
+      if (reqUrl.pathname.startsWith('/caldav/')) {
+        const [status, body] = await caldavRoute(request, env, reqUrl.pathname);
+        return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
+      }
       if (params.get('share')) {
         const dl = await resolveShare(params.get('share'));
         const r = await fetch(dl);

@@ -145,7 +145,7 @@ export function parseICS(text, rangeStart, rangeEnd) {
     if (!e.start || e.status === 'CANCELLED') continue;
     if (!e.recurrenceId && overrides.has(e.uid)) e.exdates.push(...overrides.get(e.uid).map((t) => new Date(t)));
     for (const occ of expand(e, rangeStart, rangeEnd)) {
-      out.push({ id: `${e.uid || e.title}-${occ.start.getTime()}`, title: e.title || '(sin título)', location: e.location || '', description: e.description || '', url: e.url || '', recurring: !!e.rrule, start: occ.start, end: occ.end, allDay: !!e.allDay });
+      out.push({ id: `${e.uid || e.title}-${occ.start.getTime()}`, uid: e.uid || '', recurrenceId: e.recurrenceId ? e.recurrenceId.toISOString() : null, title: e.title || '(sin título)', location: e.location || '', description: e.description || '', url: e.url || '', recurring: !!e.rrule, start: occ.start, end: occ.end, allDay: !!e.allDay });
     }
   }
   return out;

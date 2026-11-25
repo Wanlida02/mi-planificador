@@ -50,6 +50,21 @@ Si el Excel cambia, vuelve a cargarlo.
 >
 > Los enlaces públicos de iCloud son difíciles de adivinar, pero cualquiera que tenga uno puede ver ese calendario. No los compartas.
 
+### 3b. Mover eventos de iCloud desde la app (opcional)
+Los enlaces públicos solo permiten **ver**. Para **mover** eventos, el worker se conecta a tu iCloud (CalDAV):
+
+1. **Contraseña específica de app**: <https://account.apple.com> → *Inicio de sesión y seguridad* → **Contraseñas específicas de app** → «+» → nombre `Planificador` → copia la contraseña (`xxxx-xxxx-xxxx-xxxx`). No es la contraseña de tu Apple ID y puedes revocarla cuando quieras.
+2. **Código privado**: en la app, ⚙︎ → *Mover eventos de iCloud* → **🎲 Generar código** (se copia solo).
+3. **Secretos del worker**: Cloudflare → *Workers & Pages* → `ics-proxy` → **Settings** → **Variables and Secrets** → **+ Add** (tipo **Secret**) tres veces:
+   - `ICLOUD_USER` = el email de tu Apple ID
+   - `ICLOUD_APP_PASSWORD` = la contraseña del paso 1
+   - `PLANNER_TOKEN` = el código del paso 2
+   → **Deploy**.
+4. Vuelve a pegar el código de [`worker/ics-proxy.js`](worker/ics-proxy.js) en el worker (**Edit code** → **Deploy**), porque esta versión es nueva.
+5. En la app: ⚙︎ → **🔌 Probar conexión** → debe listar tus calendarios. **Guardar**.
+
+A partir de ahí, los eventos de iCloud se mueven igual que las tareas: arrastrándolos, con **⇄ Mover** en su detalle o con los botones día antes/después y ±15 min/±1 h. En los eventos que se repiten solo se mueve ese día. El cambio se guarda en tu iCloud. El enlace público tarda unos minutos en reflejarlo; mientras tanto la app lo muestra ya movido, con borde punteado.
+
 ### 4. Google (Tasks + sincronización)
 Necesitas un *Client ID* de OAuth propio (gratuito):
 
@@ -69,6 +84,7 @@ Haz lo mismo en cada dispositivo (pegar el Client ID y conectar). A partir de ah
 | Acción | Ordenador | iPhone |
 |---|---|---|
 | Crear tarea en un hueco | Arrastra en un hueco vacío o haz doble clic | Doble toque en el hueco |
+| Agenda de hoy y mañana | Pestaña **Hoy** | Pestaña **Hoy** |
 | Ver detalle (evento o tarea) | Clic | Un toque |
 | Mover tarea | Arrastrar, o detalle → **⇄ Mover** y clic en el hueco | Mantener pulsado y arrastrar, o detalle → **⇄ Mover** y tocar el hueco |
 | Ajustes rápidos | Detalle: día antes/después, ±15 min, más corta/larga, próximo hueco | Igual |

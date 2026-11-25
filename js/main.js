@@ -34,6 +34,61 @@ function applyZoom(px, keepMin) {
   renderWeek();
   sc.scrollTop = (mid - dayStartMin()) * ppm() - y;
 }
+// ---------- Eventos de iCloud movidos (se muestran ya movidos hasta que iCloud publique el cambio) ----------
+const MOVES_KEY = 'cfs.evmoves';
+const getMoves = () => { try { return JSON.parse(localStorage.getItem(MOVES_KEY)) || {}; } catch { return {}; } };
+const setMoves = (m) => { try { localStorage.setItem(MOVES_KEY, JSON.stringify(m)); } catch {} };
+function calEvents(from, to) {
+  const fe = feedEvents(from, to);
+  const mv = getMoves();
+  const keys = Object.keys(mv);
+  if (!keys.length) return fe;
+  let dirty = false;
+  const out = fe.filter((f) => !mv[f.id]);
+  for (const k of keys) {
+    const m = mv[k], s = new Date(m.start), e = new Date(m.end);
+    // iCloud ya refleja el cambio (o el aviso es muy antiguo): olvidarlo
+    if (Date.now() - m.at > 12 * 3600e3 || fe.some((f) => f.uid === m.uid && f.start.getTime() === s.getTime() && f.id !== k)) { delete mv[k]; dirty = true; continue; }
+    if (s < to && e > from) out.push({ ...m.ev, id: 'mv:' + k, origId: k, occ: m.occ, start: s, end: e, pending: true });
+  }
+  if (dirty) setMoves(mv);
+  return out;
+}
+const caldavOn = () => !!(state.settings.caldavToken && state.settings.proxy && !proxyError(state.settings.proxy));
+async function caldavCall(path, body) {
+  const base = state.settings.proxy.trim().split('?')[0].replace(/\/+$/, '');
+  let r;
+  try { r = await fetch(base + path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', 'X-Planner-Token': state.settings.caldavToken }, body: body ? JSON.stringify(body) : undefined }); }
+  catch { throw new Error('No se pudo conectar con el worker (¿has desplegado la versión nueva?)'); }
+  let j = {}; try { j = await r.json(); } catch {}
+  if (!r.ok) throw new Error(j.error || `El worker respondió ${r.status}`);
+  return j;
+}
+/** Mueve un evento de iCloud (solo esa ocurrencia si se repite). start/end: Date. */
+async function moveEvent(ev, start, end) {
+  if (!caldavOn()) { toast('Para mover eventos de iCloud, configura «Mover eventos de iCloud» en Ajustes', 5000); return; }
+  if (!ev.uid) { toast('Este evento no tiene identificador de iCloud; no se puede mover'); return; }
+  const key = ev.origId || ev.id;
+  const occ = ev.occ || ev.recurrenceId || (ev.recurring ? ev.start.toISOString() : null);
+  const body = ev.allDay
+    ? { uid: ev.uid, occurrence: occ && toYMD(new Date(occ)), allDay: true, start: toYMD(start), end: toYMD(end) }
+    : { uid: ev.uid, occurrence: occ, allDay: false, start: start.toISOString(), end: end.toISOString() };
+  const mv = getMoves(), prev = mv[key];
+  const { start: _s, end: _e, id: _i, origId: _o, pending: _p, ...rest } = ev;
+  mv[key] = { uid: ev.uid, occ, start: start.toISOString(), end: end.toISOString(), at: Date.now(), ev: rest };
+  setMoves(mv); render();
+  toast('Moviendo en iCloud…');
+  try {
+    await caldavCall('/caldav/move', body);
+    toast(`✓ «${ev.title}» movido en tu calendario de iCloud`);
+    setTimeout(async () => { await refreshFeeds(true); render(); }, 30000);
+  } catch (e) {
+    const m2 = getMoves(); if (prev) m2[key] = prev; else delete m2[key]; setMoves(m2); render();
+    toast('⚠︎ No se pudo mover en iCloud: ' + e.message, 7000);
+  }
+}
+const evDur = (ev) => Math.max(15, Math.round((ev.end - ev.start) / 60000));
+
 function visibleDays() {
   const start = viewDays === 7 ? mondayOf(anchor) : new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
   return Array.from({ length: viewDays }, (_, i) => addDays(start, i));
@@ -114,7 +169,7 @@ function renderWeek() {
       el('div', { class: 'dow', text: compact ? DOW[d.getDay()].slice(0, 1).toUpperCase() : DOW[d.getDay()] }), el('div', { class: 'dnum', text: d.getDate() }));
   }));
 
-  const fe = feedEvents(first, addDays(last, 1));
+  const fe = calEvents(first, addDays(last, 1));
   const perDay = days.map((d) => itemsForDay(toYMD(d), fe));
 
   $('#cal-allday').replaceChildren(el('div', { class: 'gutter' }), ...perDay.map((p) =>
@@ -148,8 +203,14 @@ function renderBlock(it) {
   if (e <= s) style.display = 'none';
   const time = `${min2hm(it.s % 1440)}–${min2hm(Math.min(it.e, 1440) % 1440 || 0).replace(/^00:00$/, '24:00')}`;
   if (it.type !== 'task') {
-    return el('div', { class: `ev ${it.type}${conflictIds.has(it.ref?.id) ? ' conflict' : ''}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, onclick: () => { if (!suppressClick && !moveMode) detailSheet(it); } },
+    const movable = !!(it.ref?.feed && caldavOn());
+    const b = el('div', { class: `ev ${it.type}${movable ? ' movable' : ''}${it.ref?.pending ? ' pending' : ''}${conflictIds.has(it.ref?.id) ? ' conflict' : ''}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, onclick: () => { if (!suppressClick && !moveMode) detailSheet(it); } },
       el('div', { class: 't', text: it.title }), el('div', { class: 's', text: [time, it.sub].filter(Boolean).join(' · ') }));
+    if (movable) {
+      const ev = it.ref, pseudo = { id: ev.id, title: ev.title, duration: evDur(ev), start: min2hm(it.s) };
+      b.addEventListener('pointerdown', (e) => { lastPointerType = e.pointerType; press(e, { type: 'move', task: pseudo, event: ev, el: b }); });
+    }
+    return b;
   }
   const t = it.task;
   const blk = el('div', { class: `ev task${t.done ? ' done' : ''}${h < 34 ? ' short' : ''}${conflictIds.has(t.id) ? ' conflict' : ''}`, style, dataset: { id: t.id }, title: `${t.title}\n${time} (${fmtDur(t.duration)})\nDoble clic para editar · arrastra para mover` },
@@ -231,7 +292,7 @@ function computeConflicts() {
   const work = state.work.events.filter((w) => w.kind === 'trabajo' && w.date >= today);
   if (!work.length) return [];
   const to = addDays(parseYMD(work.reduce((m, w) => (w.date > m ? w.date : m), today)), 1);
-  const fe = feedEvents(from, to).filter((f) => !f.allDay);
+  const fe = calEvents(from, to).filter((f) => !f.allDay);
   const tasks = liveTasks().filter((t) => isScheduled(t) && !t.done && t.date >= today);
   const at = (date, hm) => { const d = parseYMD(date); d.setMinutes(hm2min(hm)); return d; };
   const out = [];
@@ -320,6 +381,63 @@ function renderNotice() {
     el('button', { type: 'button', class: 'btn small', text: 'Revisar ajustes', onclick: settingsModal }));
 }
 
+// ======================================================================
+// Hoy: agenda del día elegido y el siguiente, con huecos libres
+// ======================================================================
+let todayAnchor = null;
+function renderToday() {
+  const base = todayAnchor || new Date(); base.setHours(0, 0, 0, 0);
+  const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes(), todayStr = toYMD(now);
+  const fe = calEvents(base, addDays(base, 2));
+  const ps = hm2min(state.settings.planStart || '08:00'), pe = hm2min(state.settings.planEnd || '21:00');
+  const out = [];
+  // tareas vencidas (fecha límite pasada, sin hacer ni programar)
+  const overdue = liveTasks().filter((t) => !t.done && !isScheduled(t) && t.due && t.due < todayStr);
+  if (overdue.length && toYMD(base) === todayStr) {
+    out.push(el('div', { class: 'ag-day' }, '⏰ Vencidas', el('span', { class: 'muted', text: `${overdue.length}` })));
+    for (const t of overdue) out.push(el('button', { type: 'button', class: 'ag-row task', onclick: () => taskSheet(t.id) },
+      el('div', { class: 'tm' }, '—'), el('div', { class: 'ti' }, t.title, el('div', { class: 'su', text: 'Fecha límite: ' + fmtDay(t.due) })), el('span')));
+  }
+  for (let i = 0; i < 2; i++) {
+    const d = addDays(base, i), ds = toYMD(d);
+    const lab = ds === todayStr ? 'Hoy' : ds === toYMD(addDays(now, 1)) ? 'Mañana' : ds === toYMD(addDays(now, -1)) ? 'Ayer' : '';
+    out.push(el('div', { class: 'ag-day' }, lab || fmtDayLong(ds).replace(/^./, (c) => c.toUpperCase()), lab ? el('span', { class: 'muted', text: fmtDayLong(ds) }) : null));
+    const { timed, allDay } = itemsForDay(ds, fe);
+    const conf = (it) => conflictIds.has(it.ref?.id || it.task?.id);
+    for (const a of allDay) out.push(el('button', { type: 'button', class: `ag-row ${a.type}`, onclick: () => detailSheet(a) },
+      el('div', { class: 'tm', text: 'Todo el día' }), el('div', { class: 'ti' }, (a.type === 'task' ? '☐ ' : '') + a.title, a.type === 'task' ? el('div', { class: 'su', text: 'Tarea sin hora: tócala para elegir hueco' }) : null), el('span')));
+    timed.sort((a, b) => a.s - b.s);
+    // huecos libres dentro del horario de planificación
+    let cur = ps;
+    if (ds === todayStr) cur = Math.max(cur, Math.ceil(nowMin / SNAP) * SNAP);
+    const rows = [];
+    for (const it of timed) {
+      if (it.s - cur >= 30 && it.s > ps && cur < pe) rows.push({ free: [cur, Math.min(it.s, pe)] });
+      rows.push({ it });
+      cur = Math.max(cur, it.e);
+    }
+    if (pe - cur >= 30) rows.push({ free: [cur, pe] });
+    if (!timed.length && !allDay.length) out.push(el('div', { class: 'ag-empty', text: 'Nada programado.' }));
+    for (const r of rows) {
+      if (r.free) {
+        const [a, b] = r.free;
+        out.push(el('div', { class: 'ag-free' }, el('span', { text: `Libre ${min2hm(a)}–${endHM(b)} · ${fmtDur(b - a)}` }),
+          el('button', { type: 'button', class: 'btn small', text: '+ Tarea aquí', onclick: () => taskModal(null, { date: ds, start: min2hm(a), duration: Math.min(60, b - a) }) })));
+        continue;
+      }
+      const it = r.it, t = it.task;
+      const isNow = ds === todayStr && it.s <= nowMin && it.e > nowMin, past = ds === todayStr && it.e <= nowMin;
+      out.push(el('button', { type: 'button', class: `ag-row ${it.type}${t?.done ? ' done' : ''}${isNow ? ' now' : ''}${past ? ' past' : ''}`, onclick: () => detailSheet(it) },
+        el('div', { class: 'tm' }, min2hm(it.s), el('small', { text: endHM(Math.min(it.e, 1440)) })),
+        el('div', { class: 'ti' }, (t ? (t.done ? '✓ ' : '☐ ') : '') + it.title,
+          el('div', { class: 'su', text: [it.type === 'trabajo' ? it.sub : t ? fmtDur(t.duration || 60) : (CAT_LABEL[it.type] || '') + (it.ref?.location ? ' · ' + it.ref.location : '')].filter(Boolean).join(' · ') }),
+          conf(it) ? el('div', { class: 'ag-warn', text: '⚠︎ Se solapa con el trabajo' }) : null),
+        isNow ? el('span', { class: 'tag', text: 'Ahora' }) : el('span')));
+    }
+  }
+  $('#agenda').replaceChildren(...out);
+}
+
 function render() {
   renderNotice();
   updateConflicts();
@@ -327,6 +445,7 @@ function render() {
   renderWeek();
   renderSide();
   if (tab === 'backlog') renderKanban();
+  if (tab === 'today') renderToday();
 }
 
 // ======================================================================
@@ -379,7 +498,7 @@ function startDrag(e) {
     drag.inCal = true;
     info.el.classList.add('dragging');
     drag.ghost = info.el.cloneNode(true);
-    drag.ghost.classList.remove('dragging'); drag.ghost.classList.add('ghost');
+    drag.ghost.classList.remove('dragging', 'lifted', 'pending'); drag.ghost.classList.add('ghost');
     Object.assign(drag.ghost.style, { left: '2px', width: 'calc(100% - 6px)' });
   } else if (info.type === 'resize') {
     drag.start = hm2min(info.task.start);
@@ -489,6 +608,12 @@ function endDrag() {
   const d = drag; cleanupDrag(); drag = null;
   if (d.type === 'resize') { if (d.duration) upsertTask({ id: d.task.id, duration: d.duration }); else render(); return; }
   if (d.type === 'create') { if (d.e > d.s) taskModal(null, { date: d.col.dataset.date, start: min2hm(d.s), duration: d.e - d.s }); return; }
+  if (d.target && d.event) {
+    const st = parseYMD(d.target.date); st.setMinutes(hm2min(d.target.start));
+    if (st.getTime() === d.event.start.getTime()) { render(); return; }
+    moveEvent(d.event, st, new Date(st.getTime() + (d.event.end - d.event.start)));
+    return;
+  }
   if (d.target) { upsertTask({ id: d.task.id, ...d.target }); toast(`“${d.task.title}” → ${fmtDay(d.target.date)} ${d.target.start}`); return; }
   if (d.kTarget) {
     const ord = (id) => state.tasks[id]?.order || 0;
@@ -540,7 +665,7 @@ function toggleDone(t) {
 function findSlot(duration, excludeId) {
   const from = new Date(); from.setHours(0, 0, 0, 0);
   const horizon = 60;
-  const fe = feedEvents(from, addDays(from, horizon + 1));
+  const fe = calEvents(from, addDays(from, horizon + 1));
   const ps = hm2min(state.settings.planStart || '08:00'), pe = hm2min(state.settings.planEnd || '21:00');
   const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
   for (let i = 0; i <= horizon; i++) {
@@ -663,7 +788,18 @@ function detailSheet(it) {
     const o = c.work.id === f.id ? c.other : { title: c.work.title, start: null };
     body.push(el('div', { class: 'err', text: `⚠︎ Coincide con «${o.title}»${o.start ? ` (${hmOf(o.start)}–${hmOf(o.end)})` : ` (${c.work.start}–${c.work.end})`}` }));
   }
-  if (f.feed) body.push(el('div', { class: 'muted', text: 'Es un evento de tu calendario de iCloud: para cambiarlo o moverlo, edítalo en la app Calendario.' }));
+  if (f.feed && caldavOn() && f.uid) {
+    const shift = (ms) => { closeModal(); moveEvent(f, new Date(f.start.getTime() + ms), new Date(f.end.getTime() + ms)); };
+    const act = (label, fn, cls = '') => el('button', { type: 'button', class: `btn ${cls}`, text: label, onclick: fn });
+    body.push(el('div', { class: 'sheet-actions' },
+      act('⇄ Mover: tocar nuevo hueco', () => { closeModal(); enterMoveMode(null, f); }, 'primary'),
+      el('div', { class: 'sheet-row' }, act('◀ Día antes', () => shift(-864e5)), act('Día después ▶', () => shift(864e5))),
+      f.allDay ? null : el('div', { class: 'sheet-row' }, act('− 15 min', () => shift(-9e5)), act('+ 15 min', () => shift(9e5)), act('− 1 h', () => shift(-36e5)), act('+ 1 h', () => shift(36e5)))));
+    body.push(el('div', { class: 'muted', text: (f.recurring || f.recurrenceId || f.occ ? 'Se repite: solo se moverá este día. ' : '') + 'El cambio se guarda en tu calendario de iCloud. También puedes mantenerlo pulsado y arrastrarlo.' }));
+    if (f.pending) body.push(el('div', { class: 'muted', text: '⏳ Movido hace poco: iCloud tarda unos minutos en publicar el cambio.' }));
+  } else if (f.feed) {
+    body.push(el('div', { class: 'muted', text: 'Para moverlo desde aquí, activa «Mover eventos de iCloud» en Ajustes.' }));
+  }
   if (it.type === 'trabajo') body.push(el('div', { class: 'muted', text: 'Viene de la programación anual (Excel): no se edita aquí.' }));
   openModal(it.title, body, [
     it.type !== 'festivo' ? el('button', { type: 'button', class: 'btn', text: '+ Tarea relacionada', onclick: () => taskModal(null, { title: it.title, due: it.date }) }) : null,
@@ -712,11 +848,11 @@ function taskSheet(id) {
 
 // ---------- Modo mover: tocar el hueco de destino ----------
 let moveMode = null;
-function enterMoveMode(id) {
-  const t = state.tasks[id]; if (!t) return;
-  moveMode = { id };
+function enterMoveMode(id, ev) {
+  const t = ev ? { title: ev.title } : state.tasks[id]; if (!t) return;
+  moveMode = ev ? { event: ev } : { id };
   if (tab !== 'week') switchTab('week');
-  if (t.date) goTo(parseYMD(t.date));
+  if (ev) goTo(ev.start); else if (t.date) goTo(parseYMD(t.date));
   document.body.classList.add('move-mode');
   const bar = $('#movebar');
   bar.replaceChildren(el('span', {}, 'Toca el día y la hora para «', el('b', { text: t.title }), '» (puedes cambiar de semana con ‹ ›)'),
@@ -729,6 +865,14 @@ const placeAt = (e) => {
   const col = e.target.closest?.('.day-col') || colAt(e.clientX, e.clientY);
   if (!col) return;
   e.stopPropagation(); e.preventDefault();
+  if (moveMode.event) {
+    const ev = moveMode.event, dur = evDur(ev);
+    const m = Math.max(0, Math.min(1440 - dur, Math.floor(minAt(col, e.clientY) / SNAP) * SNAP));
+    exitMoveMode();
+    const st = parseYMD(col.dataset.date); st.setMinutes(m);
+    moveEvent(ev, st, new Date(st.getTime() + (ev.end - ev.start)));
+    return;
+  }
   const t = state.tasks[moveMode.id], dur = t.duration || 60;
   const m = Math.max(0, Math.min(1440 - dur, Math.floor(minAt(col, e.clientY) / SNAP) * SNAP));
   exitMoveMode();
@@ -806,6 +950,21 @@ function settingsModal() {
     catch (e) { linkStatus.textContent = '⚠︎ ' + e.message; }
   } });
 
+  const cdToken = el('input', { value: s.caldavToken || '', placeholder: 'código privado (el mismo que PLANNER_TOKEN en Cloudflare)', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
+  const cdStatus = el('div', { class: 'muted', text: s.caldavToken ? 'Configurado. Pulsa «Probar conexión» para comprobarlo.' : 'Sin configurar: los eventos de iCloud solo se pueden ver.' });
+  const cdGen = el('button', { type: 'button', class: 'btn small', text: '🎲 Generar código', onclick: () => {
+    const a = new Uint8Array(18); crypto.getRandomValues(a);
+    cdToken.value = Array.from(a, (b) => b.toString(36).padStart(2, '0')).join('').slice(0, 28);
+    cdStatus.textContent = 'Copia este código y ponlo en Cloudflare como secreto PLANNER_TOKEN (ver README).';
+    navigator.clipboard?.writeText(cdToken.value).then(() => toast('Código copiado'), () => {});
+  } });
+  const cdTest = el('button', { type: 'button', class: 'btn small', text: '🔌 Probar conexión', onclick: async () => {
+    const pErr = proxyError(proxy.value); if (pErr || !proxy.value.trim()) { cdStatus.textContent = '⚠︎ Primero pon bien la URL del proxy (más arriba).'; return; }
+    updateSettings({ proxy: proxy.value.trim(), caldavToken: cdToken.value.trim() });
+    cdStatus.textContent = 'Conectando con iCloud…';
+    try { const r = await caldavCall('/caldav/calendars'); cdStatus.textContent = `✓ Conectado. Calendarios: ${r.calendars.join(', ')}`; render(); }
+    catch (e) { cdStatus.textContent = '⚠︎ ' + e.message; }
+  } });
   const clientId = el('input', { value: getClientId(), placeholder: 'xxxx.apps.googleusercontent.com', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
   const clientErr = el('div', { class: 'err' });
   const gtAuto = el('input', { type: 'checkbox' }); gtAuto.checked = s.gtasksAuto !== false;
@@ -844,6 +1003,9 @@ function settingsModal() {
       feedList,
       el('button', { type: 'button', class: 'btn small', text: '+ Añadir calendario', onclick: () => { feeds.push({ id: uid(), name: '', url: '', category: feeds.length ? 'personal' : 'familia' }); drawFeeds(); } }),
       field('Proxy para iCloud: la URL de tu worker de Cloudflare (https://….workers.dev)', proxy), proxyErr, moveBtn),
+    el('div', { class: 'section' }, el('h3', { text: '✏️ Mover eventos de iCloud' }),
+      el('div', { class: 'muted', text: 'Para mover eventos de tu calendario de Apple desde aquí, tu worker de Cloudflare necesita tu Apple ID y una contraseña específica de app (guardados como secretos allí, nunca en la app). Pasos en el README.' }),
+      field('Código privado', cdToken), el('div', { class: 'seg' }, cdGen, cdTest), cdStatus),
     el('div', { class: 'section' }, el('h3', { text: '🔔 Avisos de solapes' }),
       el('div', { class: 'muted', text: 'Al abrir la app (y cada hora con ella abierta) se revisa la programación y tus calendarios. Si un día de trabajo choca con una cita, aparece un aviso y se marca en rojo.' }),
       'Notification' in window ? el('button', { type: 'button', class: 'btn small', text: Notification.permission === 'granted' ? '✓ Notificaciones activadas' : 'Activar notificaciones del sistema', disabled: Notification.permission === 'granted', onclick: async (e) => {
@@ -877,7 +1039,7 @@ function settingsModal() {
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
-      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
+      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
     });
@@ -1086,6 +1248,8 @@ function switchTab(t) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + t));
   document.body.classList.toggle('tab-backlog', t === 'backlog');
+  document.body.classList.toggle('tab-today', t === 'today');
+  lsSet('cfs.tab', t);
   render();
 }
 function computeViewDays() {
@@ -1145,6 +1309,9 @@ $('#fab').onclick = () => taskModal(null);
   // Safari: evitar que el pellizco haga zoom de toda la página
   for (const ev of ['gesturestart', 'gesturechange']) sc.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
 }
+$('#today-prev').onclick = () => { todayAnchor = addDays(todayAnchor || new Date(), -1); renderToday(); };
+$('#today-next').onclick = () => { todayAnchor = addDays(todayAnchor || new Date(), 1); renderToday(); };
+$('#today-now').onclick = () => { todayAnchor = null; renderToday(); };
 $('#prev').onclick = () => step(-1);
 $('#next').onclick = () => step(1);
 $('#today').onclick = () => { goTo(new Date()); scrollToMorning(); };
@@ -1190,6 +1357,7 @@ if (+lsGet(ZOOM_KEY)) document.documentElement.style.setProperty('--hour', Math.
 renderFilters();
 render();
 scrollToMorning();
+if (['today', 'backlog'].includes(lsGet('cfs.tab'))) switchTab(lsGet('cfs.tab'));
 if (getClientId()) { if (G.isSignedIn()) syncNow(false); else setSync('pending', 'Pulsa para conectar con Google y sincronizar'); }
 refreshFeeds().then(() => render());
 setTimeout(() => { if (window.XLSX) autoRefreshExcel(); else window.addEventListener('load', autoRefreshExcel, { once: true }); }, 1500);

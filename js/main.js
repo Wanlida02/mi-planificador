@@ -1,15 +1,15 @@
 import { state, save, onChange, upsertTask, deleteTask, updateSettings, setWork, liveTasks, mergeRemote, exportable, CATEGORIES, PRIORITIES, uid } from './store.js';
 import { parseProgramacion } from './programacion.js';
-import { refreshFeeds, feedEvents, feedStatus, clearFeedCache } from './feeds.js';
+import { refreshFeeds, feedEvents, feedStatus, feedProblems, clearFeedCache } from './feeds.js';
 import * as G from './google.js';
 import * as LF from './localfile.js';
-import { el, toast, toYMD, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
+import { normalizeClientId, proxyError, feedUrlError, el, toast, toYMD, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
 
 const $ = (s) => document.querySelector(s);
 const SNAP = 15;
 const PRIO_RANK = { alta: 0, media: 1, baja: 2, '': 3 };
 const CLIENT_KEY = 'cfs.clientId';
-const getClientId = () => { try { return localStorage.getItem(CLIENT_KEY) || ''; } catch { return ''; } };
+const getClientId = () => { try { return normalizeClientId(localStorage.getItem(CLIENT_KEY) || ''); } catch { return ''; } };
 G.setClientId(getClientId());
 
 let anchor = new Date();
@@ -20,6 +20,20 @@ let lastPointerType = 'mouse';
 // ======================================================================
 // Utilidades de calendario
 // ======================================================================
+const VIEW_KEY = 'cfs.view', ZOOM_KEY = 'cfs.zoom';
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+const ZMIN = 26, ZMAX = 130;
+function applyZoom(px, keepMin) {
+  const sc = $('#cal-scroll');
+  const y = sc.clientHeight / 2;
+  const mid = keepMin ?? ((sc.scrollTop + y) / ppm() + dayStartMin());
+  const v = Math.round(Math.max(ZMIN, Math.min(ZMAX, px)));
+  document.documentElement.style.setProperty('--hour', v + 'px');
+  lsSet(ZOOM_KEY, v);
+  renderWeek();
+  sc.scrollTop = (mid - dayStartMin()) * ppm() - y;
+}
 function visibleDays() {
   const start = viewDays === 7 ? mondayOf(anchor) : new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
   return Array.from({ length: viewDays }, (_, i) => addDays(start, i));
@@ -88,10 +102,14 @@ function renderWeek() {
     ? `${first.getDate()}–${last.getDate()} ${MONTHS[first.getMonth()]} ${first.getFullYear()}`
     : `${first.getDate()} ${MONTHS[first.getMonth()].slice(0, 3)} – ${last.getDate()} ${MONTHS[last.getMonth()].slice(0, 3)} ${last.getFullYear()}`;
 
+  const colW = ($('#cal').clientWidth - 52) / n;
+  const compact = colW < 80;
+  $('#cal').classList.toggle('compact', compact);
+  document.querySelectorAll('#view-seg button').forEach((b) => b.classList.toggle('on', +b.dataset.days === n));
   $('#cal-head').replaceChildren(el('div'), ...days.map((d) => {
     const ds = toYMD(d), wk = d.getDay() === 0 || d.getDay() === 6;
-    return el('div', { class: `dh${ds === today ? ' today' : ''}${wk ? ' weekend' : ''}` },
-      el('div', { class: 'dow', text: DOW[d.getDay()] }), el('div', { class: 'dnum', text: d.getDate() }));
+    return el('div', { class: `dh${ds === today ? ' today' : ''}${wk ? ' weekend' : ''}`, title: fmtDay(ds), onclick: () => { if (n > 1) { setView(1); goTo(d); } } },
+      el('div', { class: 'dow', text: compact ? DOW[d.getDay()].slice(0, 1).toUpperCase() : DOW[d.getDay()] }), el('div', { class: 'dnum', text: d.getDate() }));
   }));
 
   const fe = feedEvents(first, addDays(last, 1));
@@ -166,6 +184,9 @@ function card(t, { compact = false } = {}) {
 function renderSide() {
   const list = sortTasks(liveTasks().filter((t) => !t.done && !isScheduled(t)));
   $('#side-list').replaceChildren(...(list.length ? list.map((t) => card(t, { compact: true })) : [el('div', { class: 'empty', text: 'Nada pendiente de programar 🎉' })]));
+  $('#tray-list').replaceChildren(...(list.length ? list.map((t) => card(t, { compact: true })) : [el('div', { class: 'empty', text: 'Nada pendiente de programar 🎉 · pulsa + para crear una tarea' })]));
+  $('#tray-title').textContent = list.length ? `Por programar (${list.length})` : 'Nada por programar · pulsa + para crear una tarea';
+  $('#tray').classList.toggle('empty', !list.length);
   $('#pending-count').textContent = list.length || '';
 }
 
@@ -281,7 +302,17 @@ function conflictsModal() {
   ], [el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal })]);
 }
 
+function renderNotice() {
+  const n = $('#notice');
+  const probs = feedProblems();
+  if (!probs.length) { n.hidden = true; return; }
+  n.hidden = false;
+  n.replaceChildren(el('span', { text: `⚠︎ No se pudo cargar ${probs.map((p) => `«${p.f.name}»`).join(', ')}: ${probs[0].st.error}` }),
+    el('button', { type: 'button', class: 'btn small', text: 'Revisar ajustes', onclick: settingsModal }));
+}
+
 function render() {
+  renderNotice();
   updateConflicts();
   updateExcelBtn();
   renderWeek();
@@ -336,12 +367,16 @@ function startDrag(e) {
   if (info.type === 'move') {
     const r = info.el.getBoundingClientRect();
     drag.grab = Math.max(0, (pressSt.y - r.top) / ppm());
+    drag.inCal = true;
     info.el.classList.add('dragging');
     drag.ghost = info.el.cloneNode(true);
     drag.ghost.classList.remove('dragging'); drag.ghost.classList.add('ghost');
     Object.assign(drag.ghost.style, { left: '2px', width: 'calc(100% - 6px)' });
   } else if (info.type === 'resize') {
     drag.start = hm2min(info.task.start);
+    drag.inCal = true;
+    // mantener la distancia entre el dedo y el borde inferior (el borde sigue al dedo)
+    drag.rOff = (info.el.getBoundingClientRect().bottom - pressSt.y) / ppm();
   } else if (info.type === 'card') {
     info.el.classList.add('dragging-src');
     drag.float = el('div', { class: 'float-card', text: info.task.title || '(sin título)' });
@@ -362,9 +397,11 @@ function autoScroll() {
   if (!drag) return;
   const sc = $('#cal-scroll'); const r = sc.getBoundingClientRect();
   if (drag.x < r.left || drag.x > r.right) return;
+  // solo cuando el dedo/ratón ya está dentro del calendario (al arrastrar desde la bandeja de abajo no debe desplazarse solo)
+  if (!drag.inCal) return;
   const edge = 36;
-  if (drag.y < r.top + edge && drag.y > r.top - 60) sc.scrollTop -= 10;
-  else if (drag.y > r.bottom - edge && drag.y < r.bottom + 60) sc.scrollTop += 10;
+  if (drag.y < r.top + edge && drag.y > r.top - 40) sc.scrollTop -= 10;
+  else if (drag.y > r.bottom - edge && drag.y < r.bottom + 40) sc.scrollTop += 10;
   else return;
   moveDrag({ clientX: drag.x, clientY: drag.y });
 }
@@ -380,7 +417,7 @@ function moveDrag(e) {
   const t = drag.task;
   if (drag.type === 'resize') {
     const col = drag.el.parentElement;
-    const end = Math.max(drag.start + SNAP, snap(minAt(col, e.clientY)));
+    const end = Math.max(drag.start + SNAP, snap(minAt(col, e.clientY) + (drag.rOff || 0)));
     drag.duration = Math.min(end, 1440) - drag.start;
     drag.el.style.height = drag.duration * ppm() - 1 + 'px';
     drag.el.querySelector('.s').textContent = `${t.start}–${min2hm(drag.start + drag.duration)} · ${fmtDur(drag.duration)}`;
@@ -398,6 +435,7 @@ function moveDrag(e) {
   const col = colAt(e.clientX, e.clientY);
   document.querySelectorAll('.kcol.over').forEach((k) => k.classList.remove('over'));
   drag.dropLine?.remove();
+  if (col) drag.inCal = true;
   if (col && drag.ghost) {
     const dur = t.duration || 60;
     let m = snap(minAt(col, e.clientY) - (drag.type === 'card' ? Math.min(dur, 60) / 2 : drag.grab));
@@ -514,6 +552,7 @@ function findSlot(duration, excludeId) {
 // ======================================================================
 const modal = $('#modal'), mform = $('#modal-form');
 let onSubmit = null;
+mform.noValidate = true; // iOS bloquea en silencio el envío si un campo no pasa su validación
 mform.addEventListener('submit', (e) => { e.preventDefault(); onSubmit?.(); });
 function openModal(title, body, foot, submit) {
   onSubmit = submit;
@@ -547,7 +586,7 @@ function taskModal(t, preset = {}) {
   const title = el('input', { class: 'title-input', value: d.title, placeholder: 'Título de la tarea', required: true });
   const notes = el('textarea', { placeholder: 'Notas' }); notes.value = d.notes || '';
   const date = el('input', { type: 'date', value: d.date || '' });
-  const start = el('input', { type: 'time', step: 900, value: d.start || '' });
+  const start = el('input', { type: 'time', value: d.start || '' });
   const dur = durationSelect(d.duration || 60);
   const due = el('input', { type: 'date', value: d.due || '' });
   const done = el('input', { type: 'checkbox' }); done.checked = !!d.done;
@@ -621,17 +660,20 @@ function settingsModal() {
   const drawFeeds = () => feedList.replaceChildren(...feeds.map((f, i) => {
     const st = feedStatus(f.id);
     const name = el('input', { value: f.name, placeholder: 'Nombre (p.ej. Familia)', oninput: (e) => { f.name = e.target.value; } });
-    const url = el('input', { value: f.url, placeholder: 'webcal://p…-caldav.icloud.com/published/2/…', oninput: (e) => { f.url = e.target.value; } });
+    const urlErr = el('div', { class: 'err', text: feedUrlError(f.url) });
+    const url = el('input', { value: f.url, placeholder: 'webcal://p…-caldav.icloud.com/published/2/…', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', oninput: (e) => { f.url = e.target.value; urlErr.textContent = feedUrlError(f.url); } });
     const cat = el('select', { onchange: (e) => { f.category = e.target.value; } },
       el('option', { value: 'familia', text: 'Luna/Familia' }), el('option', { value: 'personal', text: 'Personal' }), el('option', { value: 'ignorar', text: 'Ignorar' }));
     cat.value = f.category;
     return el('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px', borderBottom: '1px solid var(--line-soft)' } },
       el('div', { class: 'feed' }, name, cat, el('button', { type: 'button', class: 'btn icon small', 'aria-label': 'Quitar', text: '×', onclick: () => { feeds.splice(i, 1); drawFeeds(); } })),
-      url,
+      url, urlErr,
       st ? el('div', { class: 'muted', text: st.ok ? `✓ Actualizado ${new Date(st.at).toLocaleTimeString('es-ES')}` : `⚠︎ ${st.error}` }) : null);
   }));
   drawFeeds();
-  const proxy = el('input', { value: s.proxy, placeholder: 'https://ics-proxy.tu-usuario.workers.dev' });
+  const proxy = el('input', { value: s.proxy, placeholder: 'https://ics-proxy.tu-usuario.workers.dev', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', inputmode: 'url' });
+  const proxyErr = el('div', { class: 'err', text: proxyError(s.proxy) });
+  proxy.addEventListener('input', () => { proxyErr.textContent = proxyError(proxy.value); });
   const excelLink = el('input', { value: s.excelLink || '', placeholder: 'https://www.icloud.com/iclouddrive/…#Programacion_Anual_2026' });
   const linkStatus = el('div', { class: 'muted', text: s.excelLink ? `Actualización diaria activa. Última comprobación: ${lastExcelCheck() ? new Date(lastExcelCheck()).toLocaleString('es-ES') : 'nunca'}.` : 'Sin enlace: la programación solo cambia cuando cargas el archivo a mano.' });
   const localStatus = el('div', { class: 'muted' });
@@ -653,7 +695,10 @@ function settingsModal() {
     catch (e) { linkStatus.textContent = '⚠︎ ' + e.message; }
   } });
 
-  const clientId = el('input', { value: getClientId(), placeholder: 'xxxx.apps.googleusercontent.com' });
+  const clientId = el('input', { value: getClientId(), placeholder: 'xxxx.apps.googleusercontent.com', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
+  const clientErr = el('div', { class: 'err' });
+  const checkClient = () => { const v = clientId.value.trim(); clientErr.textContent = v && !/\.apps\.googleusercontent\.com$/i.test(normalizeClientId(v)) ? 'No parece un Client ID de Google (termina en .apps.googleusercontent.com).' : ''; };
+  clientId.addEventListener('input', checkClient); checkClient();
   const gState = el('div', { class: 'muted', text: G.isSignedIn() ? '✓ Conectado a Google (sincronización activa).' : 'No conectado.' });
 
   const hStart = el('input', { type: 'number', min: 0, max: 12, value: s.dayStart, style: { width: '70px' } });
@@ -686,7 +731,7 @@ function settingsModal() {
       el('div', { class: 'muted' }, 'En el iPhone: Calendario → Calendarios → (i) junto a “Familia” → activa “Calendario público” → Compartir enlace. Repite con “Calendar”. Pega aquí los enlaces.'),
       feedList,
       el('button', { type: 'button', class: 'btn small', text: '+ Añadir calendario', onclick: () => { feeds.push({ id: uid(), name: '', url: '', category: feeds.length ? 'personal' : 'familia' }); drawFeeds(); } }),
-      field('Proxy para iCloud (sirve para calendarios y Excel; ver README)', proxy)),
+      field('Proxy para iCloud (sirve para calendarios y Excel; ver README)', proxy), proxyErr),
     el('div', { class: 'section' }, el('h3', { text: '🔔 Avisos de solapes' }),
       el('div', { class: 'muted', text: 'Al abrir la app (y cada hora con ella abierta) se revisa la programación y tus calendarios. Si un día de trabajo choca con una cita, aparece un aviso y se marca en rojo.' }),
       'Notification' in window ? el('button', { type: 'button', class: 'btn small', text: Notification.permission === 'granted' ? '✓ Notificaciones activadas' : 'Activar notificaciones del sistema', disabled: Notification.permission === 'granted', onclick: async (e) => {
@@ -694,7 +739,7 @@ function settingsModal() {
         if (r === 'granted') systemNotify('Planificador', 'Te avisaré aquí cuando el trabajo se solape con otra cosa.');
       } }) : el('div', { class: 'muted', text: 'En iPhone, las notificaciones solo funcionan con la app añadida a la pantalla de inicio.' })),
     el('div', { class: 'section' }, el('h3', { text: '🔄 Google (Tasks + sincronización)' }),
-      field('Client ID de OAuth (ver README)', clientId), gState,
+      field('Client ID de OAuth (ver README)', clientId), clientErr, gState,
       el('div', { class: 'seg' },
         el('button', { type: 'button', class: 'btn small', text: G.isSignedIn() ? 'Volver a conectar' : 'Conectar con Google', onclick: async () => { saveClient(); try { await G.signIn(getClientId()); gState.textContent = '✓ Conectado.'; syncNow(true); } catch (e) { gState.textContent = '⚠︎ ' + e.message; } } }),
         G.isSignedIn() ? el('button', { type: 'button', class: 'btn small', text: 'Desconectar', onclick: () => { G.signOut(); gState.textContent = 'Desconectado.'; setSync('off'); } }) : null)),
@@ -706,11 +751,13 @@ function settingsModal() {
         el('button', { type: 'button', class: 'btn small', text: 'Exportar JSON', onclick: () => { const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(exportable(), null, 1)], { type: 'application/json' })), download: `planificador-${toYMD(new Date())}.json` }); a.click(); } }),
         el('button', { type: 'button', class: 'btn small', text: 'Importar JSON', onclick: () => importJson.click() }), importJson)),
   ];
-  const saveClient = () => { try { localStorage.setItem(CLIENT_KEY, clientId.value.trim()); } catch {} G.setClientId(clientId.value.trim()); };
+  const saveClient = () => { const v = normalizeClientId(clientId.value); clientId.value = v; try { localStorage.setItem(CLIENT_KEY, v); } catch {} G.setClientId(v); };
   openModal('Ajustes', body, [
     el('button', { type: 'button', class: 'btn', text: 'Cancelar', onclick: closeModal }),
     el('button', { type: 'submit', class: 'btn primary', text: 'Guardar' }),
   ], async () => {
+    const pErr = proxyError(proxy.value), fErr = feeds.map((f) => feedUrlError(f.url)).find(Boolean);
+    if (pErr || fErr) { proxyErr.textContent = pErr; (pErr ? proxy : feedList).scrollIntoView({ block: 'center', behavior: 'smooth' }); toast('⚠︎ Revisa los campos marcados en rojo', 4000); return; }
     saveClient();
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
@@ -721,9 +768,13 @@ function settingsModal() {
     });
     closeModal();
     clearFeedCache();
-    if (await refreshFeeds(true)) render();
-    const bad = state.settings.feeds.map((f) => feedStatus(f.id)).filter((x) => x && !x.ok);
-    if (bad.length) toast('⚠︎ ' + bad[0].error, 5000);
+    const nFeeds = state.settings.feeds.filter((f) => f.category !== 'ignorar').length;
+    toast(nFeeds ? `✓ Guardado. Descargando ${nFeeds} calendario${nFeeds > 1 ? 's' : ''}…` : '✓ Guardado', 3000);
+    await refreshFeeds(true);
+    render();
+    const bad = feedProblems();
+    if (bad.length) toast(`⚠︎ ${bad[0].f.name}: ${bad[0].st.error}`, 7000);
+    else if (nFeeds) toast(`✓ ${nFeeds} calendario${nFeeds > 1 ? 's' : ''} de iCloud cargado${nFeeds > 1 ? 's' : ''}`, 3000);
   });
 }
 
@@ -891,9 +942,14 @@ function switchTab(t) {
   render();
 }
 function computeViewDays() {
-  const nv = window.innerWidth <= 720 ? 3 : 7;
+  const saved = +lsGet(VIEW_KEY);
+  const nv = [1, 3, 7].includes(saved) ? saved : 7;
   if (nv !== viewDays) { viewDays = nv; return true; }
   return false;
+}
+function setView(n) {
+  if (viewDays === 7 && n !== 7) { const t = new Date(); const w = visibleDays(); anchor = w.some((d) => toYMD(d) === toYMD(t)) ? t : w[0]; }
+  viewDays = n; lsSet(VIEW_KEY, n); renderWeek();
 }
 function scrollToMorning() {
   const now = new Date();
@@ -901,6 +957,47 @@ function scrollToMorning() {
   $('#cal-scroll').scrollTop = (m - dayStartMin()) * ppm();
 }
 
+document.querySelectorAll('#view-seg button').forEach((b) => { b.onclick = () => setView(+b.dataset.days); });
+$('#zoom-in').onclick = () => applyZoom(hourPx() * 1.25);
+$('#zoom-out').onclick = () => applyZoom(hourPx() / 1.25);
+$('#tray-head').onclick = () => { const t = $('#tray'); t.classList.toggle('closed'); lsSet('cfs.tray', t.classList.contains('closed') ? '0' : '1'); };
+if (lsGet('cfs.tray') === '0') $('#tray').classList.add('closed');
+$('#fab').onclick = () => taskModal(null);
+// pellizcar para hacer zoom de horas (2 dedos sobre el calendario)
+{
+  const sc = $('#cal-scroll');
+  let pinch = null;
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const grid = $('#cal-grid');
+  sc.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 2) return;
+    cancelPress();
+    const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - sc.getBoundingClientRect().top;
+    pinch = { d0: dist(e.touches), h0: hourPx(), h: hourPx(), midY, at: sc.scrollTop + midY };
+    grid.style.transformOrigin = `0 ${pinch.at}px`;
+  }, { passive: true });
+  sc.addEventListener('touchmove', (e) => {
+    if (!pinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    pinch.h = Math.max(ZMIN, Math.min(ZMAX, pinch.h0 * dist(e.touches) / pinch.d0));
+    grid.style.transform = `scaleY(${pinch.h / pinch.h0})`; // vista previa fluida
+  }, { passive: false });
+  const end = () => {
+    if (!pinch) return;
+    const { h0, h, at, midY } = pinch; pinch = null;
+    grid.style.transform = ''; grid.style.transformOrigin = '';
+    const min = at / (h0 / 60) + dayStartMin();
+    const v = Math.round(h);
+    document.documentElement.style.setProperty('--hour', v + 'px');
+    lsSet(ZOOM_KEY, v);
+    renderWeek();
+    sc.scrollTop = (min - dayStartMin()) * ppm() - midY;
+  };
+  sc.addEventListener('touchend', (e) => { if (e.touches.length < 2) end(); });
+  sc.addEventListener('touchcancel', end);
+  // Safari: evitar que el pellizco haga zoom de toda la página
+  for (const ev of ['gesturestart', 'gesturechange']) sc.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+}
 $('#prev').onclick = () => step(-1);
 $('#next').onclick = () => step(1);
 $('#today').onclick = () => { goTo(new Date()); scrollToMorning(); };
@@ -930,23 +1027,24 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); taskModal(null); }
 });
 let rT;
-window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { computeViewDays(); render(); }, 120); });
+window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { render(); }, 120); });
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
   render();
-  if (await refreshFeeds()) render();
+  await refreshFeeds(); render();
   if (G.isSignedIn()) syncNow(false);
   autoRefreshExcel();
 });
 setInterval(() => { if (!drag) renderWeek(); }, 60000);
-setInterval(async () => { if (document.visibilityState === 'visible' && await refreshFeeds()) render(); }, 15 * 60000);
+setInterval(async () => { if (document.visibilityState === 'visible') { await refreshFeeds(); render(); } }, 15 * 60000);
 
 computeViewDays();
+if (+lsGet(ZOOM_KEY)) document.documentElement.style.setProperty('--hour', Math.max(ZMIN, Math.min(ZMAX, +lsGet(ZOOM_KEY))) + 'px');
 renderFilters();
 render();
 scrollToMorning();
 if (getClientId()) { if (G.isSignedIn()) syncNow(false); else setSync('pending', 'Pulsa para conectar con Google y sincronizar'); }
-refreshFeeds().then((c) => { if (c) render(); });
+refreshFeeds().then(() => render());
 setTimeout(() => { if (window.XLSX) autoRefreshExcel(); else window.addEventListener('load', autoRefreshExcel, { once: true }); }, 1500);
 setInterval(() => { if (document.visibilityState === 'visible') autoRefreshExcel(); }, 3600 * 1000);
 updateExcelBtn();

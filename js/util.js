@@ -33,3 +33,25 @@ export function toast(msg, ms = 2600) {
   t.textContent = msg; t.classList.add('show');
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms);
 }
+
+/** Limpia el Client ID pegado (iOS a veces añade http:// o una barra final). */
+export function normalizeClientId(s) {
+  const m = /[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com/i.exec(s || '');
+  return m ? m[0] : (s || '').trim();
+}
+/** Devuelve un mensaje de error si la URL del proxy no es válida ('' si está bien o vacía). */
+export function proxyError(s) {
+  const v = (s || '').trim();
+  if (!v) return '';
+  if (/googleusercontent\.com/i.test(v)) return 'Eso es el Client ID de Google, no el proxy. Aquí va la URL de tu worker de Cloudflare (https://ics-proxy.….workers.dev); el Client ID va en el apartado Google.';
+  if (!/^https:\/\//i.test(v)) return 'La URL del proxy debe empezar por https:// (la de tu worker de Cloudflare).';
+  try { new URL(v); } catch { return 'La URL del proxy no es válida.'; }
+  return '';
+}
+/** Devuelve un mensaje si el enlace no parece un calendario publicado de iCloud. */
+export function feedUrlError(s) {
+  const v = (s || '').trim();
+  if (!v) return '';
+  if (!/^(webcals?|https?):\/\//i.test(v)) return 'El enlace debe empezar por webcal:// o https://';
+  return '';
+}

@@ -75,8 +75,11 @@ Haz lo mismo en cada dispositivo (pegar el Client ID y conectar). A partir de ah
 | Marcar como hecha | Casilla de la tarea | Casilla de la tarea |
 | Programar desde Pendientes | Arrastrar desde el panel lateral, botón *Programar* o ⚡ | Botón *Programar* o ⚡ |
 | Navegar | ← → para cambiar de semana, `T` para hoy, `N` para nueva tarea | ‹ › |
+| Cambiar de vista | Día / 3 días / Semana (o clic en un día) | Igual (toque en un día) |
+| Zoom de horas | Botones − / + | Pellizcar con dos dedos o − / + |
+| Tareas sin programar | Panel lateral «Por programar» | Bandeja de abajo; botón + para crear |
 
-En el ordenador ves la semana completa; en el móvil, 3 días.
+La vista y el zoom elegidos se recuerdan en cada dispositivo.
 
 ## Desarrollo
 Es una web estática sin compilación (HTML + JS en módulos). Para probarla en local:

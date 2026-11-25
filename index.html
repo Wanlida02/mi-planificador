@@ -34,11 +34,20 @@
     <button class="btn icon" id="settings-btn" aria-label="Ajustes">⚙︎</button>
   </div>
 </header>
+<div class="notice" id="notice" hidden></div>
 
 <main>
   <section id="view-week" class="view active">
     <div class="week-wrap">
-      <div class="cal">
+      <div class="cal" id="cal">
+        <div class="cal-tools">
+          <div class="seg-mini" id="view-seg" role="group" aria-label="Vista">
+            <button type="button" data-days="1">Día</button><button type="button" data-days="3">3 días</button><button type="button" data-days="7">Semana</button>
+          </div>
+          <div class="seg-mini" role="group" aria-label="Zoom de horas">
+            <button type="button" id="zoom-out" aria-label="Reducir horas">−</button><button type="button" id="zoom-in" aria-label="Ampliar horas">+</button>
+          </div>
+        </div>
         <div class="cal-head" id="cal-head"></div>
         <div class="cal-allday" id="cal-allday"></div>
         <div class="cal-scroll" id="cal-scroll">
@@ -54,6 +63,11 @@
         <div id="side-list" class="side-list"></div>
       </aside>
     </div>
+    <div class="tray" id="tray">
+      <button type="button" class="tray-head" id="tray-head"><span id="tray-title">Por programar</span><span class="tray-hint">mantén pulsada una tarea y arrástrala al calendario</span><span class="chev">▾</span></button>
+      <div class="tray-list" id="tray-list"></div>
+    </div>
+    <button type="button" class="fab" id="fab" aria-label="Nueva tarea">+</button>
     <div class="legend">
       <span><i class="sw trabajo"></i>Trabajo</span>
       <span><i class="sw familia"></i>Luna / familia</span>

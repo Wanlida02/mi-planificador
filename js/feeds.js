@@ -8,6 +8,7 @@ const mem = new Map(); // url -> {text, at}
 const status = new Map(); // feedId -> {ok, error, at}
 
 export const feedStatus = (id) => status.get(id);
+export const feedProblems = () => state.settings.feeds.filter((f) => f.category !== 'ignorar').map((f) => ({ f, st: status.get(f.id) })).filter((x) => x.st && !x.st.ok);
 
 export function normalizeUrl(u) { return u.trim().replace(/^webcals?:\/\//i, 'https://'); }
 
@@ -18,14 +19,17 @@ function proxied(url) {
 }
 
 async function fetchText(url) {
-  try {
-    const r = await fetch(url, { cache: 'no-store' });
-    if (r.ok) return await r.text();
-  } catch { /* CORS: probar proxy */ }
+  const icloud = /(^|\.)icloud\.com$/i.test(new URL(url).hostname);
+  if (!icloud) { // iCloud nunca permite la descarga directa (CORS): ir directos al proxy
+    try { const r = await fetch(url, { cache: 'no-store' }); if (r.ok) return await r.text(); } catch { /* probar proxy */ }
+  }
   const p = proxied(url);
-  if (!p) throw new Error('El navegador bloquea la descarga directa (CORS). Configura el proxy en Ajustes.');
-  const r = await fetch(p, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`Proxy ${r.status}`);
+  if (!p) throw new Error('Falta el proxy en Ajustes: iCloud no deja que el navegador lea el calendario directamente.');
+  if (!/^https:\/\//i.test(p)) throw new Error('La URL del proxy debe empezar por https://');
+  let r;
+  try { r = await fetch(p, { cache: 'no-store' }); }
+  catch { throw new Error('No se pudo conectar con el proxy. Revisa su URL en Ajustes (debe ser https://….workers.dev).'); }
+  if (!r.ok) throw new Error(`El proxy respondió ${r.status}: ${(await r.text()).slice(0, 120)}`);
   return r.text();
 }
 

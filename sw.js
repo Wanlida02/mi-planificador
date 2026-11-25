@@ -1,5 +1,5 @@
 // Service worker: red primero, caché si no hay conexión.
-const CACHE = 'planificador-v1';
+const CACHE = 'planificador-v2';
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (e) => {

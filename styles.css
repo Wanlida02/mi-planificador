@@ -31,7 +31,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { height: 100%; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { height: 100dvh; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
@@ -290,6 +291,17 @@ code { background: var(--surface-2); padding: 1px 4px; border-radius: 4px; font-
 
 body.tab-backlog .nav > *:not(h1), body.tab-today .nav > *:not(h1) { visibility: hidden; }
 body.tab-backlog #range-label, body.tab-today #range-label { visibility: hidden; }
+
+/* ---------- Arranque ---------- */
+.boot { position: fixed; inset: 0; z-index: 5000; display: grid; place-items: center; background: var(--bg); color: var(--text); }
+.boot[hidden] { display: none; }
+.boot-box { text-align: center; padding: 24px; max-width: 320px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.boot-box p { color: var(--muted); margin: 0; }
+.boot-box button { font: inherit; padding: 10px 22px; border-radius: 10px; border: 0; background: var(--accent); color: var(--accent-ink); }
+.boot-spin { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* iPhone: con letra < 16 px Safari amplía la página al escribir y la deja descuadrada */
+@media (pointer: coarse) { input, select, textarea { font-size: 16px; } }
 
 /* ---------- Móvil ---------- */
 @media (max-width: 900px) {

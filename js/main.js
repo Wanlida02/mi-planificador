@@ -1135,8 +1135,20 @@ async function excelBtnClick() {
   pickerInput.click();
 }
 
+// La librería de Excel (~900 KB) solo se descarga cuando hace falta, no al abrir la app
+let xlsxP = null;
+function loadXLSX() {
+  if (window.XLSX) return Promise.resolve();
+  xlsxP ||= new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    sc.onload = () => res(); sc.onerror = () => { xlsxP = null; rej(new Error('No se pudo descargar el lector de Excel (¿sin conexión?)')); };
+    document.head.appendChild(sc);
+  });
+  return xlsxP;
+}
 async function importExcel(buf, fileName, meta = {}) {
-  if (!window.XLSX) throw new Error('No se ha cargado la librería de Excel (¿sin conexión?)');
+  await loadXLSX();
   const wb = XLSX.read(buf, { type: 'array', cellStyles: true });
   const s = state.settings;
   const r = parseProgramacion(wb, { initials: s.initials, tripHours: [s.tripStart, s.tripEnd], dayHours: [s.dayWorkStart, s.dayWorkEnd] });
@@ -1367,10 +1379,23 @@ renderFilters();
 render();
 scrollToMorning();
 if (['today', 'backlog'].includes(lsGet('cfs.tab'))) switchTab(lsGet('cfs.tab'));
+window.__appReady = true;
+$('#boot').hidden = true;
 if (getClientId()) { if (G.isSignedIn()) syncNow(false); else setSync('pending', 'Pulsa para conectar con Google y sincronizar'); }
 refreshFeeds().then(() => render());
-setTimeout(() => { if (window.XLSX) autoRefreshExcel(); else window.addEventListener('load', autoRefreshExcel, { once: true }); }, 1500);
+setTimeout(autoRefreshExcel, 2500);
 setInterval(() => { if (document.visibilityState === 'visible') autoRefreshExcel(); }, 3600 * 1000);
 updateExcelBtn();
 if (!state.work.importedAt && !liveTasks().length) setTimeout(() => toast('Empieza en ⚙︎ Ajustes: carga tu programación y tus calendarios', 5000), 600);
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    // buscar versión nueva al abrir y al volver a la app
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(() => {});
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded || drag || modal.open) return; // primera instalación o en mitad de algo: no recargar
+    reloaded = true; location.reload();
+  });
+}

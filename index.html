@@ -13,9 +13,25 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="stylesheet" href="styles.css">
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+<script>
+// Pantalla de arranque y red de seguridad: si algo falla, se ve un mensaje con «Recargar» en vez de una pantalla en blanco
+(function () {
+  var shown = false;
+  function show(msg) {
+    if (shown) return; shown = true;
+    var d = document.getElementById('boot'); if (!d) return;
+    d.innerHTML = '<div class="boot-box"><b>No se pudo abrir el planificador</b><p>' + String(msg).replace(/[<>&]/g, '') + '</p><button onclick="location.reload()">Recargar</button></div>';
+    d.hidden = false;
+  }
+  window.__bootFail = show;
+  window.addEventListener('error', function (e) { if (!window.__appReady) show(e.message || 'Error al cargar'); });
+  window.addEventListener('unhandledrejection', function (e) { if (!window.__appReady) show((e.reason && e.reason.message) || 'Error al cargar'); });
+  setTimeout(function () { if (!window.__appReady) show('Está tardando demasiado (¿sin cobertura?).'); }, 12000);
+})();
+</script>
 </head>
 <body>
+<div id="boot" class="boot"><div class="boot-box"><div class="boot-spin"></div>Cargando…</div></div>
 <header class="topbar">
   <div class="nav">
     <button class="btn icon" id="prev" aria-label="Anterior">‹</button>

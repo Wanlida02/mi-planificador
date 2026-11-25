@@ -44,6 +44,7 @@ export function proxyError(s) {
   const v = (s || '').trim();
   if (!v) return '';
   if (/googleusercontent\.com/i.test(v)) return 'Eso es el Client ID de Google, no el proxy. Aquí va la URL de tu worker de Cloudflare (https://ics-proxy.….workers.dev); el Client ID va en el apartado Google.';
+  if (isCalendarLink(v)) return 'Eso es el enlace de un calendario, no el proxy. Los calendarios van con «+ Añadir calendario» (arriba); aquí va la URL de tu worker de Cloudflare (https://ics-proxy.….workers.dev).';
   if (!/^https:\/\//i.test(v)) return 'La URL del proxy debe empezar por https:// (la de tu worker de Cloudflare).';
   try { new URL(v); } catch { return 'La URL del proxy no es válida.'; }
   return '';
@@ -55,3 +56,5 @@ export function feedUrlError(s) {
   if (!/^(webcals?|https?):\/\//i.test(v)) return 'El enlace debe empezar por webcal:// o https://';
   return '';
 }
+
+export const isCalendarLink = (v) => /^webcals?:\/\//i.test(v.trim()) || /caldav\.icloud\.com\/published/i.test(v);

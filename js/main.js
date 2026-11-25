@@ -3,7 +3,7 @@ import { parseProgramacion } from './programacion.js';
 import { refreshFeeds, feedEvents, feedStatus, feedProblems, clearFeedCache } from './feeds.js';
 import * as G from './google.js';
 import * as LF from './localfile.js';
-import { normalizeClientId, proxyError, feedUrlError, el, toast, toYMD, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
+import { normalizeClientId, isCalendarLink, proxyError, feedUrlError, el, toast, toYMD, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
 
 const $ = (s) => document.querySelector(s);
 const SNAP = 15;
@@ -672,8 +672,14 @@ function settingsModal() {
   }));
   drawFeeds();
   const proxy = el('input', { value: s.proxy, placeholder: 'https://ics-proxy.tu-usuario.workers.dev', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', inputmode: 'url' });
-  const proxyErr = el('div', { class: 'err', text: proxyError(s.proxy) });
-  proxy.addEventListener('input', () => { proxyErr.textContent = proxyError(proxy.value); });
+  const proxyErr = el('div', { class: 'err' });
+  const moveBtn = el('button', { type: 'button', class: 'btn small', text: '↪ Moverlo a Calendarios', onclick: () => {
+    feeds.push({ id: uid(), name: feeds.some((f) => f.category === 'familia') ? 'Calendar' : 'Familia', url: proxy.value.trim(), category: feeds.some((f) => f.category === 'familia') ? 'personal' : 'familia' });
+    proxy.value = ''; drawFeeds(); showProxyErr(); feedList.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    toast('Movido a Calendarios. Revisa el nombre y la categoría, y pon la URL del worker en Proxy.', 5000);
+  } });
+  const showProxyErr = () => { proxyErr.textContent = proxyError(proxy.value); moveBtn.hidden = !isCalendarLink(proxy.value); };
+  proxy.addEventListener('input', showProxyErr);
   const excelLink = el('input', { value: s.excelLink || '', placeholder: 'https://www.icloud.com/iclouddrive/…#Programacion_Anual_2026' });
   const linkStatus = el('div', { class: 'muted', text: s.excelLink ? `Actualización diaria activa. Última comprobación: ${lastExcelCheck() ? new Date(lastExcelCheck()).toLocaleString('es-ES') : 'nunca'}.` : 'Sin enlace: la programación solo cambia cuando cargas el archivo a mano.' });
   const localStatus = el('div', { class: 'muted' });
@@ -731,7 +737,7 @@ function settingsModal() {
       el('div', { class: 'muted' }, 'En el iPhone: Calendario → Calendarios → (i) junto a “Familia” → activa “Calendario público” → Compartir enlace. Repite con “Calendar”. Pega aquí los enlaces.'),
       feedList,
       el('button', { type: 'button', class: 'btn small', text: '+ Añadir calendario', onclick: () => { feeds.push({ id: uid(), name: '', url: '', category: feeds.length ? 'personal' : 'familia' }); drawFeeds(); } }),
-      field('Proxy para iCloud (sirve para calendarios y Excel; ver README)', proxy), proxyErr),
+      field('Proxy para iCloud: la URL de tu worker de Cloudflare (https://….workers.dev)', proxy), proxyErr, moveBtn),
     el('div', { class: 'section' }, el('h3', { text: '🔔 Avisos de solapes' }),
       el('div', { class: 'muted', text: 'Al abrir la app (y cada hora con ella abierta) se revisa la programación y tus calendarios. Si un día de trabajo choca con una cita, aparece un aviso y se marca en rojo.' }),
       'Notification' in window ? el('button', { type: 'button', class: 'btn small', text: Notification.permission === 'granted' ? '✓ Notificaciones activadas' : 'Activar notificaciones del sistema', disabled: Notification.permission === 'granted', onclick: async (e) => {
@@ -752,12 +758,13 @@ function settingsModal() {
         el('button', { type: 'button', class: 'btn small', text: 'Importar JSON', onclick: () => importJson.click() }), importJson)),
   ];
   const saveClient = () => { const v = normalizeClientId(clientId.value); clientId.value = v; try { localStorage.setItem(CLIENT_KEY, v); } catch {} G.setClientId(v); };
+  showProxyErr();
   openModal('Ajustes', body, [
     el('button', { type: 'button', class: 'btn', text: 'Cancelar', onclick: closeModal }),
     el('button', { type: 'submit', class: 'btn primary', text: 'Guardar' }),
   ], async () => {
     const pErr = proxyError(proxy.value), fErr = feeds.map((f) => feedUrlError(f.url)).find(Boolean);
-    if (pErr || fErr) { proxyErr.textContent = pErr; (pErr ? proxy : feedList).scrollIntoView({ block: 'center', behavior: 'smooth' }); toast('⚠︎ Revisa los campos marcados en rojo', 4000); return; }
+    if (pErr || fErr) { showProxyErr(); (pErr ? proxy : feedList).scrollIntoView({ block: 'center', behavior: 'smooth' }); toast('⚠︎ Revisa los campos marcados en rojo', 4000); return; }
     saveClient();
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,

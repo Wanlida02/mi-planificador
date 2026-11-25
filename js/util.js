@@ -58,3 +58,5 @@ export function feedUrlError(s) {
 }
 
 export const isCalendarLink = (v) => /^webcals?:\/\//i.test(v.trim()) || /caldav\.icloud\.com\/published/i.test(v);
+const DOW_LONG = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+export const fmtDayLong = (s) => { const d = parseYMD(s); return `${DOW_LONG[d.getDay()]} ${d.getDate()} de ${MONTHS[d.getMonth()]}`; };

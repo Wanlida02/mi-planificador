@@ -112,6 +112,8 @@ export function parseICS(text, rangeStart, rangeEnd) {
       case 'UID': cur.uid = p.value; break;
       case 'SUMMARY': cur.title = unescapeText(p.value); break;
       case 'LOCATION': cur.location = unescapeText(p.value); break;
+      case 'DESCRIPTION': cur.description = unescapeText(p.value); break;
+      case 'URL': cur.url = p.value.trim(); break;
       case 'DTSTART': { const d = parseDate(p); if (d) { cur.start = d.date; cur.allDay = d.allDay; } break; }
       case 'DTEND': { const d = parseDate(p); if (d) cur.end = d.date; break; }
       case 'DURATION': cur.duration = p.value; break;
@@ -143,7 +145,7 @@ export function parseICS(text, rangeStart, rangeEnd) {
     if (!e.start || e.status === 'CANCELLED') continue;
     if (!e.recurrenceId && overrides.has(e.uid)) e.exdates.push(...overrides.get(e.uid).map((t) => new Date(t)));
     for (const occ of expand(e, rangeStart, rangeEnd)) {
-      out.push({ id: `${e.uid || e.title}-${occ.start.getTime()}`, title: e.title || '(sin título)', location: e.location || '', start: occ.start, end: occ.end, allDay: !!e.allDay });
+      out.push({ id: `${e.uid || e.title}-${occ.start.getTime()}`, title: e.title || '(sin título)', location: e.location || '', description: e.description || '', url: e.url || '', recurring: !!e.rrule, start: occ.start, end: occ.end, allDay: !!e.allDay });
     }
   }
   return out;

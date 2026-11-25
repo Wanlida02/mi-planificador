@@ -3,7 +3,7 @@ import { parseProgramacion } from './programacion.js';
 import { refreshFeeds, feedEvents, feedStatus, feedProblems, clearFeedCache } from './feeds.js';
 import * as G from './google.js';
 import * as LF from './localfile.js';
-import { normalizeClientId, isCalendarLink, proxyError, feedUrlError, el, toast, toYMD, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
+import { normalizeClientId, isCalendarLink, proxyError, feedUrlError, el, toast, toYMD, fmtDayLong, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
 
 const $ = (s) => document.querySelector(s);
 const SNAP = 15;
@@ -54,22 +54,24 @@ function itemsForDay(dateStr, fe) {
   const timed = [], allDay = [];
   for (const w of state.work.events) {
     if (w.date !== dateStr) continue;
-    if (w.kind === 'festivo') allDay.push({ type: 'festivo', title: w.title });
-    else timed.push({ type: 'trabajo', s: hm2min(w.start), e: hm2min(w.end), title: w.title, sub: [w.trip ? `Viaje ${w.tripDay}/${w.tripDays}` : 'Trabajo', w.detail].filter(Boolean).join(' · '), ref: w });
+    if (w.kind === 'festivo') allDay.push({ type: 'festivo', title: w.title, date: dateStr, ref: w });
+    else timed.push({ type: 'trabajo', date: dateStr, s: hm2min(w.start), e: hm2min(w.end), title: w.title, sub: [w.trip ? `Viaje ${w.tripDay}/${w.tripDays}` : 'Trabajo', w.detail].filter(Boolean).join(' · '), ref: w });
   }
   const d0 = parseYMD(dateStr), d1 = addDays(d0, 1);
   for (const f of fe) {
     if (!(f.start < d1 && f.end > d0)) continue;
-    if (f.allDay) { allDay.push({ type: f.category, title: f.title, ref: f }); continue; }
+    if (f.allDay) { allDay.push({ type: f.category, title: f.title, ref: f, date: dateStr, allDay: true }); continue; }
     const cs = f.start < d0 ? d0 : f.start, ce = f.end > d1 ? d1 : f.end;
     const s = cs.getHours() * 60 + cs.getMinutes();
     const e = ce.getTime() === d1.getTime() ? 1440 : ce.getHours() * 60 + ce.getMinutes();
-    timed.push({ type: f.category, s, e, title: f.title, sub: f.location, ref: f });
+    timed.push({ type: f.category, date: dateStr, s, e, title: f.title, sub: f.location, ref: f });
   }
   for (const t of liveTasks()) {
+    // tareas sin hora pero con fecha (p. ej. de Google Tasks): arriba, en la fila de todo el día
+    if (!t.start && !t.done && (t.date || t.due) === dateStr) { allDay.push({ type: 'task', title: t.title, task: t, date: dateStr }); continue; }
     if (t.date !== dateStr || !t.start) continue;
     const s = hm2min(t.start);
-    timed.push({ type: 'task', s, e: s + (t.duration || 60), title: t.title, task: t });
+    timed.push({ type: 'task', date: dateStr, s, e: s + (t.duration || 60), title: t.title, task: t });
   }
   return { timed, allDay };
 }
@@ -116,7 +118,7 @@ function renderWeek() {
   const perDay = days.map((d) => itemsForDay(toYMD(d), fe));
 
   $('#cal-allday').replaceChildren(el('div', { class: 'gutter' }), ...perDay.map((p) =>
-    el('div', { class: 'ad' }, p.allDay.map((a) => el('div', { class: `chip ${a.type}`, title: a.title, text: a.title })))));
+    el('div', { class: 'ad' }, p.allDay.map((a) => el('button', { type: 'button', class: `chip ${a.type}`, title: a.title, text: (a.type === 'task' ? '☐ ' : '') + a.title, onclick: () => detailSheet(a) })))));
 
   const grid = $('#cal-grid');
   const hours = el('div', { class: 'hours' });
@@ -146,7 +148,7 @@ function renderBlock(it) {
   if (e <= s) style.display = 'none';
   const time = `${min2hm(it.s % 1440)}–${min2hm(Math.min(it.e, 1440) % 1440 || 0).replace(/^00:00$/, '24:00')}`;
   if (it.type !== 'task') {
-    return el('div', { class: `ev ${it.type}${conflictIds.has(it.ref?.id) ? ' conflict' : ''}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, ondblclick: () => infoModal(it) },
+    return el('div', { class: `ev ${it.type}${conflictIds.has(it.ref?.id) ? ' conflict' : ''}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, onclick: () => { if (!suppressClick && !moveMode) detailSheet(it); } },
       el('div', { class: 't', text: it.title }), el('div', { class: 's', text: [time, it.sub].filter(Boolean).join(' · ') }));
   }
   const t = it.task;
@@ -157,7 +159,14 @@ function renderBlock(it) {
     el('div', { class: 's', text: time }),
     el('div', { class: 'rz', onpointerdown: (e) => press(e, { type: 'resize', task: t, el: blk }) }));
   blk.addEventListener('pointerdown', (e) => press(e, { type: 'move', task: t, el: blk }));
-  blk.addEventListener('dblclick', (e) => { if (lastPointerType !== 'touch') { e.stopPropagation(); taskModal(t); } });
+  // un toque/clic → detalle con acciones; doble clic (ratón) → editor completo
+  let clickT;
+  blk.addEventListener('click', (e) => {
+    if (suppressClick || moveMode || e.target.closest('.ck,.rz')) return;
+    if (lastPointerType === 'touch') { taskSheet(t.id); return; }
+    clearTimeout(clickT); clickT = setTimeout(() => taskSheet(t.id), 240);
+  });
+  blk.addEventListener('dblclick', (e) => { if (lastPointerType !== 'touch') { clearTimeout(clickT); e.stopPropagation(); taskModal(state.tasks[t.id]); } });
   return blk;
 }
 
@@ -177,7 +186,7 @@ function card(t, { compact = false } = {}) {
     el('div', { class: 'body' }, el('div', { class: 'ct', text: t.title || '(sin título)' }), el('div', { class: 'meta' }, meta)),
     !compact && !t.done ? el('button', { type: 'button', class: 'btn small go', text: isScheduled(t) ? 'Reprogramar' : 'Programar', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); taskModal(t, { focusSchedule: true }); } }) : null);
   c.addEventListener('pointerdown', (e) => press(e, { type: 'card', task: t, el: c }));
-  c.addEventListener('click', () => { if (!suppressClick) taskModal(t); });
+  c.addEventListener('click', () => { if (!suppressClick) taskSheet(t.id); });
   return c;
 }
 
@@ -355,12 +364,12 @@ document.addEventListener('touchmove', (e) => { if (drag) e.preventDefault(); },
 function handleTap(info) {
   const key = info.type + (info.task?.id || info.date || '');
   const now = Date.now();
-  if (info.type === 'move' && lastTap.key === key && now - lastTap.t < 380) { lastTap = { key: '', t: 0 }; taskModal(info.task); return; }
   lastTap = { key, t: now };
 }
 
 function startDrag(e) {
   const info = pressSt.info;
+  if (pressSt.touch && info.el) info.el.classList.add('lifted');
   if (pressSt.timer) clearTimeout(pressSt.timer);
   drag = { ...info, x: e.clientX, y: e.clientY };
   document.body.classList.add('is-dragging');
@@ -469,7 +478,7 @@ function moveDrag(e) {
 function cleanupDrag() {
   clearInterval(drag.scrollTimer);
   drag.ghost?.remove(); drag.float?.remove(); drag.box?.remove(); drag.dropLine?.remove();
-  drag.el?.classList.remove('dragging', 'dragging-src');
+  drag.el?.classList.remove('dragging', 'dragging-src', 'lifted');
   document.querySelectorAll('.kcol.over').forEach((k) => k.classList.remove('over'));
   document.body.classList.remove('is-dragging');
   suppressClick = true; setTimeout(() => { suppressClick = false; }, 50);
@@ -554,8 +563,9 @@ const modal = $('#modal'), mform = $('#modal-form');
 let onSubmit = null;
 mform.noValidate = true; // iOS bloquea en silencio el envío si un campo no pasa su validación
 mform.addEventListener('submit', (e) => { e.preventDefault(); onSubmit?.(); });
-function openModal(title, body, foot, submit) {
+function openModal(title, body, foot, submit, { sheet = false } = {}) {
   onSubmit = submit;
+  modal.classList.toggle('sheet', sheet);
   mform.replaceChildren(
     el('div', { class: 'm-head' }, el('h2', { text: title }), el('button', { type: 'button', class: 'btn icon', 'aria-label': 'Cerrar', text: '×', onclick: closeModal })),
     el('div', { class: 'm-body' }, body), el('div', { class: 'm-foot' }, foot));
@@ -628,11 +638,106 @@ function taskModal(t, preset = {}) {
   if (preset.focusSchedule) setTimeout(() => date.focus(), 50); else if (isNew) setTimeout(() => title.focus(), 50);
 }
 
-function infoModal(it) {
-  const lines = [el('div', { class: 'muted', text: `${it.type === 'trabajo' ? 'Trabajo (programación anual)' : it.type === 'familia' ? 'Luna / familia' : 'Personal'} · ${min2hm(it.s)}–${min2hm(Math.min(it.e, 1439))}` })];
-  if (it.sub) lines.push(el('div', { text: it.sub }));
-  openModal(it.title, lines, [el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal })]);
+const CAT_LABEL = { trabajo: 'Trabajo · programación anual', familia: 'Luna / familia', personal: 'Personal', festivo: 'Festivo', task: 'Tarea' };
+const endHM = (e) => (e >= 1440 ? '24:00' : min2hm(e));
+
+/** Detalle de un evento del calendario (iCloud, trabajo, festivo) o de una tarea. */
+function detailSheet(it) {
+  if (it.task) return taskSheet(it.task.id);
+  const f = it.ref || {};
+  const when = it.allDay || it.s == null ? `${fmtDayLong(it.date)} · todo el día` : `${fmtDayLong(it.date)} · ${min2hm(it.s)}–${endHM(it.e)}`;
+  const body = [
+    el('div', { class: 'sheet-cat' }, el('i', { class: `sw ${it.type}` }), (CAT_LABEL[it.type] || '') + (f.feed ? ` · calendario «${f.feed}»` : '')),
+    el('div', { class: 'sheet-when', text: when }),
+  ];
+  if (it.type === 'trabajo') {
+    if (f.detail) body.push(el('div', {}, el('b', { text: 'Equipo: ' }), f.detail));
+    if (f.trip) body.push(el('div', { text: `Viaje de ${f.tripDays} días (día ${f.tripDay} de ${f.tripDays})` }));
+  }
+  if (f.location) body.push(el('div', {}, '📍 ', f.location));
+  if (f.description) body.push(el('div', { class: 'sheet-desc', text: f.description }));
+  if (f.url && /^https:\/\//i.test(f.url)) body.push(el('a', { href: f.url, target: '_blank', rel: 'noopener', text: '🔗 Abrir enlace' }));
+  if (f.recurring) body.push(el('div', { class: 'muted', text: '↻ Evento que se repite' }));
+  const cs = conflicts.filter((c) => c.work.id === f.id || c.other.id === f.id);
+  for (const c of cs) {
+    const o = c.work.id === f.id ? c.other : { title: c.work.title, start: null };
+    body.push(el('div', { class: 'err', text: `⚠︎ Coincide con «${o.title}»${o.start ? ` (${hmOf(o.start)}–${hmOf(o.end)})` : ` (${c.work.start}–${c.work.end})`}` }));
+  }
+  if (f.feed) body.push(el('div', { class: 'muted', text: 'Es un evento de tu calendario de iCloud: para cambiarlo o moverlo, edítalo en la app Calendario.' }));
+  if (it.type === 'trabajo') body.push(el('div', { class: 'muted', text: 'Viene de la programación anual (Excel): no se edita aquí.' }));
+  openModal(it.title, body, [
+    it.type !== 'festivo' ? el('button', { type: 'button', class: 'btn', text: '+ Tarea relacionada', onclick: () => taskModal(null, { title: it.title, due: it.date }) }) : null,
+    el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal }),
+  ], null, { sheet: true });
 }
+
+/** Detalle de una tarea con acciones rápidas (pensado para el móvil). */
+function taskSheet(id) {
+  const t = state.tasks[id];
+  if (!t || t.deleted) return closeModal();
+  const sched = isScheduled(t);
+  const act = (label, fn, cls = '') => el('button', { type: 'button', class: `btn ${cls}`, text: label, onclick: fn });
+  const upd = (patch, msg) => { upsertTask({ id, ...patch }); if (msg) toast(msg); taskSheet(id); };
+  const shiftDay = (n) => { const d = toYMD(addDays(parseYMD(t.date), n)); upd({ date: d }, `→ ${fmtDay(d)}`); if (tab === 'week') goTo(parseYMD(d)); };
+  const meta = [];
+  if (t.priority) meta.push(el('span', { class: 'tag', text: 'Prioridad ' + t.priority }));
+  if (t.category) meta.push(el('span', { class: `tag cat-${t.category}`, text: t.category }));
+  if (t.due) meta.push(el('span', { class: 'tag', text: 'Fecha límite: ' + fmtDay(t.due) }));
+  if (t.google) meta.push(el('span', { class: 'tag', text: 'Google Tasks' }));
+  const body = [
+    el('div', { class: 'sheet-cat' }, el('i', { class: `sw ${t.done ? 'done' : 'task'}` }), t.done ? 'Tarea hecha' : 'Tarea pendiente'),
+    el('div', { class: 'sheet-when', text: sched ? `${fmtDayLong(t.date)} · ${t.start}–${endHM(hm2min(t.start) + (t.duration || 60))} (${fmtDur(t.duration || 60)})` : `Sin hora en el calendario · ${fmtDur(t.duration || 60)}` }),
+    meta.length ? el('div', { class: 'meta' }, meta) : null,
+    t.notes ? el('div', { class: 'sheet-desc', text: t.notes }) : null,
+    el('div', { class: 'sheet-actions' },
+      act(t.done ? '↺ Marcar pendiente' : '✓ Marcar hecha', () => { toggleDone(t); taskSheet(id); }, t.done ? '' : 'primary'),
+      act(sched ? '⇄ Mover: tocar nuevo hueco' : '📅 Elegir hueco en el calendario', () => { closeModal(); enterMoveMode(id); }),
+      act('⚡ Próximo hueco libre', () => {
+        const slot = findSlot(t.duration || 60, id);
+        if (!slot) return toast('No hay huecos libres en 60 días');
+        upd(slot, `→ ${fmtDay(slot.date)} ${slot.start}`); if (tab === 'week') goTo(parseYMD(slot.date));
+      }),
+      sched ? el('div', { class: 'sheet-row' }, act('◀ Día antes', () => shiftDay(-1)), act('Día después ▶', () => shiftDay(1))) : null,
+      sched ? el('div', { class: 'sheet-row' },
+        act('− 15 min', () => upd({ start: min2hm(Math.max(0, hm2min(t.start) - 15)) })), act('+ 15 min', () => upd({ start: min2hm(Math.min(1425, hm2min(t.start) + 15)) })),
+        act('Más corta', () => upd({ duration: Math.max(15, (t.duration || 60) - 15) })), act('Más larga', () => upd({ duration: (t.duration || 60) + 15 }))) : null,
+      sched ? act('Quitar del calendario', () => upd({ date: null, start: null }, 'Vuelve a «Por programar»')) : null),
+    el('div', { class: 'muted', text: 'Consejo: en el calendario también puedes mantener pulsada la tarea y arrastrarla, o estirarla desde su borde inferior.' }),
+  ];
+  openModal(t.title || '(sin título)', body, [
+    act('✎ Editar todo', () => taskModal(state.tasks[id])),
+    act('Cerrar', closeModal, 'primary'),
+  ], null, { sheet: true });
+}
+
+// ---------- Modo mover: tocar el hueco de destino ----------
+let moveMode = null;
+function enterMoveMode(id) {
+  const t = state.tasks[id]; if (!t) return;
+  moveMode = { id };
+  if (tab !== 'week') switchTab('week');
+  if (t.date) goTo(parseYMD(t.date));
+  document.body.classList.add('move-mode');
+  const bar = $('#movebar');
+  bar.replaceChildren(el('span', {}, 'Toca el día y la hora para «', el('b', { text: t.title }), '» (puedes cambiar de semana con ‹ ›)'),
+    el('button', { type: 'button', class: 'btn small', text: 'Cancelar', onclick: exitMoveMode }));
+  bar.hidden = false;
+}
+function exitMoveMode() { moveMode = null; document.body.classList.remove('move-mode'); $('#movebar').hidden = true; }
+const placeAt = (e) => {
+  if (!moveMode) return;
+  const col = e.target.closest?.('.day-col') || colAt(e.clientX, e.clientY);
+  if (!col) return;
+  e.stopPropagation(); e.preventDefault();
+  const t = state.tasks[moveMode.id], dur = t.duration || 60;
+  const m = Math.max(0, Math.min(1440 - dur, Math.floor(minAt(col, e.clientY) / SNAP) * SNAP));
+  exitMoveMode();
+  upsertTask({ id: t.id, date: col.dataset.date, start: min2hm(m) });
+  toast(`“${t.title}” → ${fmtDay(col.dataset.date)} ${min2hm(m)}`);
+};
+$('#cal-grid').addEventListener('pointerdown', (e) => { if (moveMode) e.stopPropagation(); }, true);
+$('#cal-grid').addEventListener('click', placeAt, true);
+document.addEventListener('keydown', (e) => { if (moveMode && e.key === 'Escape') exitMoveMode(); });
 
 // ---------- Ajustes ----------
 function settingsModal() {
@@ -703,6 +808,7 @@ function settingsModal() {
 
   const clientId = el('input', { value: getClientId(), placeholder: 'xxxx.apps.googleusercontent.com', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
   const clientErr = el('div', { class: 'err' });
+  const gtAuto = el('input', { type: 'checkbox' }); gtAuto.checked = s.gtasksAuto !== false;
   const checkClient = () => { const v = clientId.value.trim(); clientErr.textContent = v && !/\.apps\.googleusercontent\.com$/i.test(normalizeClientId(v)) ? 'No parece un Client ID de Google (termina en .apps.googleusercontent.com).' : ''; };
   clientId.addEventListener('input', checkClient); checkClient();
   const gState = el('div', { class: 'muted', text: G.isSignedIn() ? '✓ Conectado a Google (sincronización activa).' : 'No conectado.' });
@@ -746,6 +852,8 @@ function settingsModal() {
       } }) : el('div', { class: 'muted', text: 'En iPhone, las notificaciones solo funcionan con la app añadida a la pantalla de inicio.' })),
     el('div', { class: 'section' }, el('h3', { text: '🔄 Google (Tasks + sincronización)' }),
       field('Client ID de OAuth (ver README)', clientId), clientErr, gState,
+      el('label', { class: 'chk', style: { color: 'var(--text)' } }, gtAuto, ' Traer automáticamente mis tareas de Google Tasks (las que tienen fecha salen ese día, arriba)'),
+      el('div', { class: 'muted', text: 'Google Tasks no comparte la hora de las tareas (solo el día): ponle la hora aquí tocándola → «Elegir hueco».' }),
       el('div', { class: 'seg' },
         el('button', { type: 'button', class: 'btn small', text: G.isSignedIn() ? 'Volver a conectar' : 'Conectar con Google', onclick: async () => { saveClient(); try { await G.signIn(getClientId()); gState.textContent = '✓ Conectado.'; syncNow(true); } catch (e) { gState.textContent = '⚠︎ ' + e.message; } } }),
         G.isSignedIn() ? el('button', { type: 'button', class: 'btn small', text: 'Desconectar', onclick: () => { G.signOut(); gState.textContent = 'Desconectado.'; setSync('off'); } }) : null)),
@@ -769,7 +877,7 @@ function settingsModal() {
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
-      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), reminderDays: Math.max(1, +reminder.value || 7),
+      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
     });
@@ -916,8 +1024,38 @@ function setSync(st, msg) {
   const dot = $('#sync-dot');
   dot.className = 'dot ' + ({ ok: 'ok', pending: 'pending', err: 'err', syncing: 'pending' }[st] || '');
   $('#sync-label').textContent = { ok: 'Sincronizado', pending: 'Sin sincronizar', err: 'Error', syncing: 'Sincronizando…' }[st] || 'Google';
+  $('#sync-btn').classList.toggle('attn', st === 'pending' || st === 'err');
   $('#sync-btn').title = msg || 'Sincronizar con Google (Tasks y copia en Drive)';
 }
+/** Trae automáticamente las tareas de Google Tasks (nuevas, cambios, completadas y borradas). Devuelve cuántas son nuevas. */
+async function syncGoogleTasks() {
+  if (state.settings.gtasksAuto === false || !G.isSignedIn()) return 0;
+  const lists = await G.listTaskLists();
+  const byGid = new Map(Object.values(state.tasks).filter((t) => t.google?.taskId).map((t) => [t.google.taskId, t]));
+  let added = 0, changed = 0, i = 0;
+  const now = Date.now();
+  for (const l of lists) {
+    for (const g of await G.listTasks(l.id, { all: true })) {
+      const loc = byGid.get(g.id);
+      const due = g.due ? g.due.slice(0, 10) : '';
+      const done = g.status === 'completed';
+      if (!loc) {
+        if (g.deleted || done || !g.title?.trim()) continue;
+        const id = uid();
+        state.tasks[id] = { id, title: g.title.trim(), notes: g.notes || '', due, date: null, start: null, duration: 60, done: false, priority: '', category: '', order: now + i++, createdAt: now, updatedAt: now, google: { listId: l.id, taskId: g.id, updated: g.updated || '' } };
+        added++; continue;
+      }
+      if (loc.deleted) continue; // borrada aquí: no la resucitamos
+      if (g.deleted) { state.tasks[loc.id] = { id: loc.id, deleted: true, updatedAt: now }; changed++; continue; }
+      if ((g.updated || '') <= (loc.google.updated || '')) continue;
+      state.tasks[loc.id] = { ...loc, title: g.title?.trim() || loc.title, notes: g.notes ?? loc.notes, due, done, doneAt: done ? (loc.doneAt || now) : null, google: { ...loc.google, listId: l.id, updated: g.updated || '' }, updatedAt: now };
+      changed++;
+    }
+  }
+  if (added || changed) { save({ sync: false }); G.driveSave(exportable()).catch(() => {}); }
+  return added;
+}
+
 async function syncNow(interactive = false) {
   if (syncing) return;
   if (!getClientId()) { if (interactive) settingsModal(); return; }
@@ -927,6 +1065,8 @@ async function syncNow(interactive = false) {
     const remote = await G.driveLoad();
     if (mergeRemote(remote)) render();
     await G.driveSave(exportable());
+    const n = await syncGoogleTasks().catch((e) => { toast('Google Tasks: ' + e.message, 5000); return 0; });
+    if (n) toast(`📥 ${n} tarea${n > 1 ? 's' : ''} nueva${n > 1 ? 's' : ''} de Google Tasks`, 4000);
     setSync('ok', 'Sincronizado ' + new Date().toLocaleTimeString('es-ES'));
   } catch (e) { setSync('err', e.message); if (interactive) toast('Sincronización: ' + e.message, 5000); }
   finally { syncing = false; }

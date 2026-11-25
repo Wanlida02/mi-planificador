@@ -106,10 +106,11 @@ export async function listTaskLists() {
   const r = await api('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100');
   return r.items || [];
 }
-export async function listTasks(listId) {
+export async function listTasks(listId, { all = false } = {}) {
   let items = [], pageToken = '';
+  const flags = all ? 'showCompleted=true&showHidden=true&showDeleted=true' : 'showCompleted=false';
   do {
-    const r = await api(`https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(listId)}/tasks?showCompleted=false&maxResults=100${pageToken ? '&pageToken=' + pageToken : ''}`);
+    const r = await api(`https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(listId)}/tasks?${flags}&maxResults=100${pageToken ? '&pageToken=' + pageToken : ''}`);
     items = items.concat(r.items || []);
     pageToken = r.nextPageToken || '';
   } while (pageToken);

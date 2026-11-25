@@ -12,7 +12,7 @@ Calendario semanal interactivo para planificar tareas encima de:
 - **Calendarios de iCloud**: “Familia” (Luna) en **rosa pastel** y “Calendar” (personal) en lila.
 - **Tus tareas**: **azul** si están pendientes y **verde** si están hechas. Se pueden arrastrar (entre días o dentro del mismo día), alargar o acortar tirando del borde inferior y editar con doble clic (en el móvil, doble toque).
 - **Pestaña Pendientes**: tablero por prioridad (Alta / Media / Baja / Sin clasificar). Arrastra las tarjetas para clasificarlas y pulsa **Programar** (o **⚡ Próximo hueco libre**) para llevarlas al calendario.
-- **Google Tasks**: importa las tareas que quieras. Al marcarlas como hechas aquí, también se completan en Google.
+- **Google Tasks**: se traen solas al sincronizar (las que tienen fecha aparecen ese día; Google no comparte la hora). También puedes importarlas a mano con prioridad. Al marcarlas como hechas aquí, también se completan en Google.
 - **Sincronización** entre iPhone y ordenador mediante un archivo oculto en tu Google Drive (carpeta *appData*, que no ves en Drive).
 
 No hay servidor ni base de datos: todo vive en tu navegador y en tu Google Drive. El repositorio no contiene datos personales.
@@ -69,7 +69,9 @@ Haz lo mismo en cada dispositivo (pegar el Client ID y conectar). A partir de ah
 | Acción | Ordenador | iPhone |
 |---|---|---|
 | Crear tarea en un hueco | Arrastra en un hueco vacío o haz doble clic | Doble toque en el hueco |
-| Mover tarea | Arrastrar | Mantener pulsado y arrastrar |
+| Ver detalle (evento o tarea) | Clic | Un toque |
+| Mover tarea | Arrastrar, o detalle → **⇄ Mover** y clic en el hueco | Mantener pulsado y arrastrar, o detalle → **⇄ Mover** y tocar el hueco |
+| Ajustes rápidos | Detalle: día antes/después, ±15 min, más corta/larga, próximo hueco | Igual |
 | Cambiar duración | Arrastra el borde inferior | Arrastra el borde inferior |
 | Editar (título, día, hora, duración…) | Doble clic | Doble toque |
 | Marcar como hecha | Casilla de la tarea | Casilla de la tarea |

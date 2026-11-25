@@ -9,6 +9,7 @@ export const PRIORITIES = [
 
 const defaults = () => ({
   tasks: {},
+  projects: {},
   work: { events: [], fileName: '', importedAt: 0 },
   settings: {
     feeds: [], proxy: '', initials: 'FS', dayStart: 6, dayEnd: 23,
@@ -22,7 +23,7 @@ export const state = load();
 function load() {
   try {
     const s = JSON.parse(localStorage.getItem(KEY));
-    if (s) { const d = defaults(); return { ...d, ...s, settings: { ...d.settings, ...s.settings }, work: { ...d.work, ...s.work } }; }
+    if (s) { const d = defaults(); return { ...d, ...s, projects: s.projects || {}, settings: { ...d.settings, ...s.settings }, work: { ...d.work, ...s.work } }; }
   } catch {}
   return defaults();
 }
@@ -49,6 +50,21 @@ export function deleteTask(id) {
   state.tasks[id] = { id, deleted: true, updatedAt: Date.now() };
   save();
 }
+export const PROJECT_COLORS = ['aqua', 'violet', 'yellow', 'magenta', 'green', 'gray'];
+export function liveProjects() { return Object.values(state.projects).filter((p) => !p.deleted).sort((a, b) => (a.order || 0) - (b.order || 0)); }
+export function upsertProject(patch) {
+  const id = patch.id || uid();
+  const used = liveProjects().map((p) => p.color);
+  const prev = state.projects[id] || { id, name: '', color: PROJECT_COLORS.find((c) => !used.includes(c)) || 'gray', weeklyHours: 0, order: Date.now(), createdAt: Date.now() };
+  state.projects[id] = { ...prev, ...patch, id, updatedAt: Date.now() };
+  save();
+  return state.projects[id];
+}
+export function deleteProject(id) {
+  if (!state.projects[id]) return;
+  state.projects[id] = { id, deleted: true, updatedAt: Date.now() };
+  save();
+}
 export function updateSettings(patch) {
   Object.assign(state.settings, patch);
   state.settingsUpdatedAt = Date.now();
@@ -63,6 +79,10 @@ export function mergeRemote(remote) {
   for (const [id, rt] of Object.entries(remote.tasks || {})) {
     const lt = state.tasks[id];
     if (!lt || (rt.updatedAt || 0) > (lt.updatedAt || 0)) { state.tasks[id] = rt; changed = true; }
+  }
+  for (const [id, rp] of Object.entries(remote.projects || {})) {
+    const lp = state.projects[id];
+    if (!lp || (rp.updatedAt || 0) > (lp.updatedAt || 0)) { state.projects[id] = rp; changed = true; }
   }
   if ((remote.work?.importedAt || 0) > (state.work.importedAt || 0)) { state.work = remote.work; changed = true; }
   if ((remote.settingsUpdatedAt || 0) > (state.settingsUpdatedAt || 0)) {

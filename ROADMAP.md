@@ -16,5 +16,6 @@
 - [ ] **Resumen semanal**: definir qué métricas (horas de trabajo/viaje, tareas, vencimientos…)
 - [ ] **Plantillas de viaje**: tareas automáticas alrededor de cada viaje del Excel
 - [ ] **Sugerir huecos**: proponer mover tareas a espacios libres cuando haya solapes o demasiadas tareas en un día
-- [ ] **Proyectos**: reservar tiempo para proyectos (p. ej. Inversiones) en lugar de apuntar cada tarea
-- [ ] **Informes de tiempo**: cuánto tiempo se dedica a cada proyecto/categoría (semana, mes, año)
+- [x] **Proyectos**: objetivo semanal, bloques (repetibles cada semana), tareas asignadas a un proyecto y «Completar objetivo» con huecos libres
+- [x] **Informes de tiempo** por proyecto: semana, mes y año (hecho / planificado) y últimas 8 semanas
+- [x] **Buscador**: citas de iCloud, tareas, bloqueos, proyectos y días de trabajo (sin distinguir tildes)

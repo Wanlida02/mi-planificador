@@ -43,11 +43,13 @@
     <button class="tab" data-tab="today" role="tab">Hoy</button>
     <button class="tab active" data-tab="week" role="tab">Semana</button>
     <button class="tab" data-tab="backlog" role="tab">Pendientes <span class="count" id="pending-count"></span></button>
+    <button class="tab" data-tab="projects" role="tab">Proyectos</button>
   </nav>
   <div class="actions">
     <button class="btn" id="excel-btn" hidden></button>
     <button class="btn warn" id="conflict-btn" hidden title="Solapes con el trabajo">⚠︎ <span id="conflict-count"></span></button>
     <button class="btn" id="sync-btn" title="Sincronizar con Google"><span class="dot" id="sync-dot"></span><span id="sync-label">Google</span></button>
+    <button class="btn icon" id="search-btn" aria-label="Buscar">🔍</button>
     <button class="btn icon" id="settings-btn" aria-label="Ajustes">⚙︎</button>
   </div>
 </header>
@@ -105,6 +107,21 @@
       <button class="btn icon" id="today-next" aria-label="Día siguiente">›</button>
     </div>
     <div class="agenda" id="agenda"></div>
+  </section>
+
+  <section id="view-projects" class="view">
+    <div class="proj-bar">
+      <div class="seg-mini" id="period-seg" role="group" aria-label="Periodo del informe">
+        <button type="button" data-p="week">Semana</button><button type="button" data-p="month">Mes</button><button type="button" data-p="year">Año</button>
+      </div>
+      <div class="period-nav">
+        <button class="btn icon" id="period-prev" aria-label="Periodo anterior">‹</button>
+        <span id="period-label"></span>
+        <button class="btn icon" id="period-next" aria-label="Periodo siguiente">›</button>
+      </div>
+      <button type="button" class="add-btn" id="proj-add">＋ Proyecto</button>
+    </div>
+    <div class="proj-wrap" id="proj-wrap"></div>
   </section>
 
   <section id="view-backlog" class="view">

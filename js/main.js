@@ -1,4 +1,4 @@
-import { state, save, onChange, upsertTask, deleteTask, updateSettings, setWork, liveTasks, mergeRemote, exportable, CATEGORIES, PRIORITIES, uid } from './store.js';
+import { state, save, onChange, upsertTask, deleteTask, updateSettings, setWork, liveTasks, mergeRemote, exportable, CATEGORIES, PRIORITIES, uid, liveProjects, upsertProject, deleteProject, PROJECT_COLORS } from './store.js';
 import { parseProgramacion } from './programacion.js';
 import { refreshFeeds, feedEvents, feedStatus, feedProblems, clearFeedCache } from './feeds.js';
 import * as G from './google.js';
@@ -106,6 +106,11 @@ function sortTasks(list) {
 }
 const isScheduled = (t) => !!(t.date && t.start);
 const isBlock = (t) => t?.kind === 'block';
+const isProj = (t) => t?.kind === 'project';
+const isReserve = (t) => isBlock(t) || isProj(t); // reservas de tiempo: no son tareas pendientes
+const projOf = (t) => (t?.projectId ? state.projects[t.projectId] : null);
+const projName = (t) => { const pr = projOf(t); return pr && !pr.deleted ? pr.name : 'Proyecto'; };
+const projColor = (pr) => `var(--p-${pr && !pr.deleted ? pr.color || 'gray' : 'gray'})`;
 
 
 /** Bloques ocupados/visibles de un día. */
@@ -127,10 +132,10 @@ function itemsForDay(dateStr, fe) {
   }
   for (const t of liveTasks()) {
     // tareas sin hora pero con fecha (p. ej. de Google Tasks): arriba, en la fila de todo el día
-    if (!t.start && !t.done && !isBlock(t) && (t.date || t.due) === dateStr) { allDay.push({ type: 'task', title: t.title, task: t, date: dateStr }); continue; }
+    if (!t.start && !t.done && !isReserve(t) && (t.date || t.due) === dateStr) { allDay.push({ type: 'task', title: t.title, task: t, date: dateStr }); continue; }
     if (t.date !== dateStr || !t.start) continue;
     const s = hm2min(t.start);
-    timed.push({ type: isBlock(t) ? 'block' : 'task', date: dateStr, s, e: s + (t.duration || 60), title: t.title, task: t });
+    timed.push({ type: isBlock(t) ? 'block' : isProj(t) ? 'project' : 'task', date: dateStr, s, e: s + (t.duration || 60), title: isProj(t) ? projName(t) : t.title, task: t });
   }
   return { timed, allDay };
 }
@@ -206,7 +211,7 @@ function renderBlock(it) {
   const style = { top: top + 'px', height: h + 'px', left: `calc(${it.col * w}% + 1px)`, width: `calc(${w}% - 3px)` };
   if (e <= s) style.display = 'none';
   const time = `${min2hm(it.s % 1440)}–${min2hm(Math.min(it.e, 1440) % 1440 || 0).replace(/^00:00$/, '24:00')}`;
-  if (it.type !== 'task' && it.type !== 'block') {
+  if (it.type !== 'task' && it.type !== 'block' && it.type !== 'project') {
     const movable = !!(it.ref?.feed && caldavOn());
     const b = el('div', { class: `ev ${it.type}${movable ? ' movable' : ''}${it.ref?.pending ? ' pending' : ''}${conflictIds.has(it.ref?.id) ? ' conflict' : ''}`, style, title: `${it.title}\n${time}${it.sub ? '\n' + it.sub : ''}`, onclick: () => { if (!suppressClick && !moveMode) detailSheet(it); } },
       el('div', { class: 't', text: it.title }), el('div', { class: 's', text: [time, it.sub].filter(Boolean).join(' · ') }));
@@ -217,11 +222,13 @@ function renderBlock(it) {
     return b;
   }
   const t = it.task;
-  const blkKind = isBlock(t);
-  const blk = el('div', { class: `ev task${blkKind ? ' block' : ''}${t.done ? ' done' : ''}${h < 34 ? ' short' : ''}${conflictIds.has(t.id) ? ' conflict' : ''}`, style, dataset: { id: t.id }, title: `${blkKind ? 'Bloqueo de agenda: ' : ''}${t.title}\n${time} (${fmtDur(t.duration)})\nDoble clic para editar · arrastra para mover` },
+  const blkKind = isBlock(t), prjKind = isProj(t);
+  const label = prjKind ? '◆ ' + projName(t) + (t.title && t.title !== projName(t) ? ' · ' + t.title : '') : (blkKind ? '🔒 ' : '') + (t.title || '(sin título)');
+  if (prjKind) style['--pc'] = projColor(projOf(t));
+  const blk = el('div', { class: `ev task${blkKind ? ' block' : ''}${prjKind ? ' project' : ''}${t.done ? ' done' : ''}${h < 34 ? ' short' : ''}${conflictIds.has(t.id) ? ' conflict' : ''}`, style, dataset: { id: t.id }, title: `${blkKind ? 'Bloqueo de agenda: ' : prjKind ? 'Proyecto: ' : ''}${label}\n${time} (${fmtDur(t.duration)})\nDoble clic para editar · arrastra para mover` },
     el('div', { class: 'row' },
-      blkKind ? null : el('button', { type: 'button', class: 'ck', 'aria-label': t.done ? 'Marcar pendiente' : 'Marcar hecha', text: t.done ? '✓' : '', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleDone(t); } }),
-      el('div', { class: 't', text: (blkKind ? '🔒 ' : '') + (t.title || '(sin título)') })),
+      blkKind || prjKind ? null : el('button', { type: 'button', class: 'ck', 'aria-label': t.done ? 'Marcar pendiente' : 'Marcar hecha', text: t.done ? '✓' : '', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleDone(t); } }),
+      el('div', { class: 't', text: label })),
     el('div', { class: 's', text: time }),
     el('div', { class: 'rz', onpointerdown: (e) => press(e, { type: 'resize', task: t, el: blk }) }));
   blk.addEventListener('pointerdown', (e) => press(e, { type: 'move', task: t, el: blk }));
@@ -257,7 +264,7 @@ function card(t, { compact = false } = {}) {
 }
 
 function renderSide() {
-  const list = sortTasks(liveTasks().filter((t) => !t.done && !isScheduled(t) && !isBlock(t)));
+  const list = sortTasks(liveTasks().filter((t) => !t.done && !isScheduled(t) && !isReserve(t)));
   $('#side-list').replaceChildren(...(list.length ? list.map((t) => card(t, { compact: true })) : [el('div', { class: 'empty', text: 'Nada pendiente de programar 🎉' })]));
   $('#tray-list').replaceChildren(...(list.length ? list.map((t) => card(t, { compact: true })) : [el('div', { class: 'empty', text: 'Nada pendiente de programar 🎉 · pulsa + para crear una tarea' })]));
   $('#tray-title').textContent = list.length ? `Por programar (${list.length})` : 'Nada por programar · pulsa + para crear una tarea';
@@ -267,7 +274,7 @@ function renderSide() {
 
 function renderKanban() {
   const cat = $('#filter-cat').value, showSched = $('#filter-scheduled').checked, showDone = $('#filter-done').checked;
-  const tasks = liveTasks().filter((t) => !isBlock(t) && (showDone || !t.done) && (showSched || !isScheduled(t) || t.done && showDone)
+  const tasks = liveTasks().filter((t) => !isReserve(t) && (showDone || !t.done) && (showSched || !isScheduled(t) || t.done && showDone)
     && (!cat || (cat === '-' ? !t.category : t.category === cat)));
   $('#kanban').replaceChildren(...PRIORITIES.map((p) => {
     const items = sortTasks(tasks.filter((t) => (t.priority || '') === p.id));
@@ -355,7 +362,7 @@ const hmOf = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinu
 function conflictsModal() {
   const dismissed = readSet(DISMISS_KEY);
   const rows = conflicts.map((c) => {
-    const label = { cita: c.other.type === 'familia' ? 'Luna / familia' : 'Personal', tarea: isBlock(c.other.task) ? 'Bloqueo de agenda' : 'Tarea', trabajo: 'Otro trabajo' }[c.kind];
+    const label = { cita: c.other.type === 'familia' ? 'Luna / familia' : 'Personal', tarea: isBlock(c.other.task) ? 'Bloqueo de agenda' : isProj(c.other.task) ? 'Proyecto' : 'Tarea', trabajo: 'Otro trabajo' }[c.kind];
     const row = el('div', { class: `conflict-row k-${c.other.type}` },
       el('div', { class: 'cr-date', text: fmtDay(c.date) }),
       el('div', { class: 'cr-body' },
@@ -384,6 +391,228 @@ function renderNotice() {
   n.hidden = false;
   n.replaceChildren(el('span', { text: `⚠︎ No se pudo cargar ${probs.map((p) => `«${p.f.name}»`).join(', ')}: ${probs[0].st.error}` }),
     el('button', { type: 'button', class: 'btn small', text: 'Revisar ajustes', onclick: settingsModal }));
+}
+
+// ======================================================================
+// Proyectos: objetivo semanal, bloques e informe de tiempo
+// ======================================================================
+let period = 'week', periodAnchor = null;
+const COLOR_NAMES = { aqua: 'Turquesa', violet: 'Violeta', yellow: 'Amarillo', magenta: 'Rosa', green: 'Verde', gray: 'Gris' };
+const fmtH = (m) => { const h = Math.floor(m / 60), r = Math.round(m % 60); return h && r ? `${h} h ${r} min` : h || !r ? `${h} h` : `${r} min`; };
+const fmtHs = (m) => (m / 60).toFixed(m % 60 ? 1 : 0).replace('.', ',') + ' h';
+
+function periodRange(kind, anchor) {
+  const a = anchor ? new Date(anchor) : new Date(); a.setHours(0, 0, 0, 0);
+  if (kind === 'week') { const f = mondayOf(a); return [f, addDays(f, 7)]; }
+  if (kind === 'month') return [new Date(a.getFullYear(), a.getMonth(), 1), new Date(a.getFullYear(), a.getMonth() + 1, 1)];
+  return [new Date(a.getFullYear(), 0, 1), new Date(a.getFullYear() + 1, 0, 1)];
+}
+function periodLabel(kind, [f, t]) {
+  if (kind === 'week') { const l = addDays(t, -1); return f.getMonth() === l.getMonth() ? `${f.getDate()}–${l.getDate()} ${MONTHS[f.getMonth()].slice(0, 3)} ${f.getFullYear()}` : `${f.getDate()} ${MONTHS[f.getMonth()].slice(0, 3)} – ${l.getDate()} ${MONTHS[l.getMonth()].slice(0, 3)}`; }
+  if (kind === 'month') return `${MONTHS[f.getMonth()].replace(/^./, (c) => c.toUpperCase())} ${f.getFullYear()}`;
+  return String(f.getFullYear());
+}
+/** Minutos de un proyecto entre dos fechas: hechos (ya pasados) y planificados (futuros). */
+function projectMinutes(pid, from, to) {
+  const now = Date.now(); let done = 0, planned = 0;
+  const fs = toYMD(from), ts = toYMD(to);
+  for (const t of liveTasks()) {
+    if (t.projectId !== pid || !isScheduled(t) || t.date < fs || t.date >= ts) continue;
+    if (!isProj(t) && t.kind && t.kind !== 'task') continue;
+    const st = parseYMD(t.date); st.setMinutes(hm2min(t.start));
+    const end = st.getTime() + (t.duration || 60) * 60000;
+    if (isProj(t) ? end <= now : t.done) done += t.duration || 60; else planned += t.duration || 60;
+  }
+  return { done, planned };
+}
+
+function renderProjects() {
+  const projects = liveProjects();
+  const range = periodRange(period, periodAnchor);
+  $('#period-label').textContent = periodLabel(period, range);
+  document.querySelectorAll('#period-seg button').forEach((b) => b.classList.toggle('on', b.dataset.p === period));
+  const wrap = $('#proj-wrap');
+  if (!projects.length) {
+    wrap.replaceChildren(el('div', { class: 'proj-empty' },
+      el('h3', { text: 'Reserva tiempo para tus proyectos' }),
+      el('p', { class: 'muted', text: 'Crea un proyecto (p. ej. «Inversiones»), ponle un objetivo de horas por semana y añade bloques en el calendario. Aquí verás cuánto llevas y cuánto tiempo le dedicas.' }),
+      el('button', { type: 'button', class: 'add-btn', text: '＋ Crear mi primer proyecto', onclick: () => projectModal(null) })));
+    return;
+  }
+  const wk = periodRange('week', null);
+  const cards = projects.map((p) => {
+    const m = projectMinutes(p.id, wk[0], wk[1]);
+    const goal = (p.weeklyHours || 0) * 60;
+    const max = Math.max(goal, m.done + m.planned, 60);
+    const pct = (x) => `${Math.min(100, (x / max) * 100)}%`;
+    const status = goal ? (m.done + m.planned >= goal ? (m.done >= goal ? '✓ Objetivo cumplido' : '✓ Objetivo cubierto con lo planificado') : `Faltan ${fmtH(goal - m.done - m.planned)} por planificar`) : 'Sin objetivo semanal';
+    return el('div', { class: 'proj-card', style: { '--pc': projColor(p) } },
+      el('div', { class: 'proj-head' },
+        el('span', { class: 'pdot' }), el('b', { class: 'pname', text: p.name }),
+        el('button', { type: 'button', class: 'btn small', text: '✎', 'aria-label': 'Editar proyecto', onclick: () => projectModal(p) })),
+      el('div', { class: 'proj-nums' }, el('span', {}, el('b', { text: fmtH(m.done) }), ' hechas'), el('span', { class: 'muted', text: ` · ${fmtH(m.planned)} planificadas` }), goal ? el('span', { class: 'muted', text: ` · objetivo ${fmtH(goal)}` }) : null),
+      el('div', { class: 'pbar', role: 'img', 'aria-label': `${p.name}: ${fmtH(m.done)} hechas y ${fmtH(m.planned)} planificadas de ${fmtH(goal)} esta semana` },
+        el('i', { class: 'pdone', style: { width: pct(m.done) }, title: `Hechas: ${fmtH(m.done)}` }),
+        el('i', { class: 'pplan', style: { width: pct(m.planned) }, title: `Planificadas: ${fmtH(m.planned)}` }),
+        goal ? el('i', { class: 'pgoal', style: { left: `calc(${pct(goal)} - 1px)` }, title: `Objetivo: ${fmtH(goal)}` }) : null),
+      el('div', { class: 'proj-status muted', text: 'Esta semana · ' + status }),
+      el('div', { class: 'seg' },
+        el('button', { type: 'button', class: 'btn small', text: '＋ Bloque', onclick: () => taskModal(null, { kind: 'project', projectId: p.id }) }),
+        goal && m.done + m.planned < goal ? el('button', { type: 'button', class: 'btn small primary', text: '⚡ Completar objetivo', onclick: () => fillGoal(p) }) : null));
+  });
+  // informe del periodo
+  const rows = projects.map((p) => ({ p, ...projectMinutes(p.id, range[0], range[1]) }));
+  const tot = rows.reduce((a, r) => a + r.done, 0), totP = rows.reduce((a, r) => a + r.planned, 0);
+  const maxR = Math.max(60, ...rows.map((r) => r.done + r.planned));
+  const report = el('div', { class: 'proj-report' },
+    el('h3', { text: `Tiempo dedicado · ${periodLabel(period, range)}` }),
+    el('div', { class: 'muted', text: `Total ${fmtH(tot)} hechas${totP ? ` · ${fmtH(totP)} planificadas` : ''}` }),
+    el('div', { class: 'hbars' }, rows.map((r) => el('div', { class: 'hrow', style: { '--pc': projColor(r.p) } },
+      el('span', { class: 'hl', text: r.p.name }),
+      el('span', { class: 'htrack', title: `${r.p.name}: ${fmtH(r.done)} hechas, ${fmtH(r.planned)} planificadas` },
+        el('i', { class: 'pdone', style: { width: `${(r.done / maxR) * 100}%` } }), el('i', { class: 'pplan', style: { width: `${(r.planned / maxR) * 100}%` } })),
+      el('span', { class: 'hv', text: fmtHs(r.done) + (r.planned ? ` (+${fmtHs(r.planned)})` : '') })))),
+    el('div', { class: 'legend-mini' }, el('span', {}, el('i', { class: 'lg done' }), 'Hecho'), el('span', {}, el('i', { class: 'lg plan' }), 'Planificado')));
+  // últimas 8 semanas por proyecto (columnas pequeñas, una gráfica por proyecto)
+  const weeksBack = 8, w0 = mondayOf(new Date());
+  const hist = el('div', { class: 'proj-report' }, el('h3', { text: 'Últimas 8 semanas (horas hechas)' }),
+    el('div', { class: 'spark-grid' }, projects.map((p) => {
+      const vals = Array.from({ length: weeksBack }, (_, i) => { const f = addDays(w0, -7 * (weeksBack - 1 - i)); return { f, m: projectMinutes(p.id, f, addDays(f, 7)).done }; });
+      const vmax = Math.max(60, ...vals.map((v) => v.m), (p.weeklyHours || 0) * 60);
+      return el('div', { class: 'spark', style: { '--pc': projColor(p) } },
+        el('div', { class: 'spark-title' }, el('span', { class: 'pdot' }), p.name, el('span', { class: 'muted', text: ` · media ${fmtHs(vals.reduce((a, v) => a + v.m, 0) / weeksBack)}/sem` })),
+        el('div', { class: 'cols' }, vals.map((v) => el('i', { style: { height: `${Math.max(2, (v.m / vmax) * 100)}%` }, class: v.m ? '' : 'zero', title: `Semana del ${v.f.getDate()} ${MONTHS[v.f.getMonth()].slice(0, 3)}: ${fmtH(v.m)}` })),
+          p.weeklyHours ? el('b', { class: 'goal-line', style: { bottom: `${((p.weeklyHours * 60) / vmax) * 100}%` }, title: `Objetivo ${p.weeklyHours} h` }) : null),
+        el('div', { class: 'cols-x' }, el('span', { text: `${vals[0].f.getDate()} ${MONTHS[vals[0].f.getMonth()].slice(0, 3)}` }), el('span', { text: 'esta sem.' })));
+    })));
+  wrap.replaceChildren(el('div', { class: 'proj-cards' }, cards), report, hist);
+}
+
+function projectModal(p) {
+  const isNew = !p;
+  const name = el('input', { class: 'title-input', value: p?.name || '', placeholder: 'Nombre (p. ej. Inversiones)' });
+  const hours = el('input', { type: 'number', min: 0, max: 80, step: 0.5, value: p?.weeklyHours ?? 0, style: { width: '90px' } });
+  const used = liveProjects().filter((x) => x.id !== p?.id).map((x) => x.color);
+  let color = p?.color || PROJECT_COLORS.find((c) => !used.includes(c)) || 'gray';
+  const sw = el('div', { class: 'seg' });
+  const drawSw = () => sw.replaceChildren(...PROJECT_COLORS.map((c) => el('button', { type: 'button', class: `csw${c === color ? ' on' : ''}`, style: { '--pc': `var(--p-${c})` }, 'aria-label': COLOR_NAMES[c], title: COLOR_NAMES[c], onclick: () => { color = c; drawSw(); } })));
+  drawSw();
+  const err = el('div', { class: 'err' });
+  openModal(isNew ? 'Nuevo proyecto' : 'Editar proyecto', [
+    name, err,
+    el('div', { class: 'row2' }, field('Objetivo semanal (horas)', hours), el('span')),
+    field('Color', sw),
+    el('div', { class: 'muted', text: 'Cuenta el tiempo de los bloques de este proyecto y de las tareas que asignes a él.' }),
+  ], [
+    !isNew ? el('div', { class: 'left' }, el('button', { type: 'button', class: 'btn danger', text: 'Eliminar', onclick: () => {
+      const n = liveTasks().filter((t) => isProj(t) && t.projectId === p.id).length;
+      if (!confirm(`¿Eliminar el proyecto «${p.name}»${n ? ` y sus ${n} bloques` : ''}?`)) return;
+      liveTasks().filter((t) => isProj(t) && t.projectId === p.id).forEach((t) => deleteTask(t.id));
+      deleteProject(p.id); closeModal(); toast('Proyecto eliminado');
+    } })) : null,
+    el('button', { type: 'button', class: 'btn', text: 'Cancelar', onclick: closeModal }),
+    el('button', { type: 'submit', class: 'btn primary', text: 'Guardar' }),
+  ], () => {
+    const n = name.value.trim();
+    if (!n) { err.textContent = 'Ponle un nombre.'; name.focus(); return; }
+    if (liveProjects().some((x) => x.id !== p?.id && x.name.toLowerCase() === n.toLowerCase())) { err.textContent = 'Ya hay un proyecto con ese nombre.'; return; }
+    upsertProject({ id: p?.id, name: n, weeklyHours: Math.max(0, Math.min(80, parseFloat(String(hours.value).replace(',', '.')) || 0)), color });
+    closeModal(); toast(isNew ? `Proyecto «${n}» creado` : 'Proyecto guardado');
+  });
+  if (isNew) setTimeout(() => name.focus(), 50);
+}
+
+/** Propone bloques en huecos libres de lo que queda de semana para completar el objetivo. */
+function fillGoal(p) {
+  const wk = periodRange('week', null);
+  const m = projectMinutes(p.id, wk[0], wk[1]);
+  let left = (p.weeklyHours || 0) * 60 - m.done - m.planned;
+  if (left <= 0) return toast('El objetivo de esta semana ya está cubierto');
+  const ps = hm2min(state.settings.planStart || '08:00'), pe = hm2min(state.settings.planEnd || '21:00');
+  const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  const fe = calEvents(wk[0], wk[1]);
+  const props = [];
+  for (let d = new Date(Math.max(now.setHours(0, 0, 0, 0), wk[0].getTime())); d < wk[1] && left > 0; d = addDays(d, 1)) {
+    const ds = toYMD(d);
+    const busy = itemsForDay(ds, fe).timed.map((it) => [it.s, it.e]).sort((a, b) => a[0] - b[0]);
+    let cur = ds === toYMD(new Date()) ? Math.max(ps, Math.ceil((nowMin + 15) / SNAP) * SNAP) : ps;
+    let placed = 0;
+    for (const [s0, e0] of [...busy, [pe, pe]]) {
+      const gap = Math.min(s0, pe) - cur;
+      if (gap >= 30 && left > 0 && placed < 120) {
+        const len = Math.min(gap, left, 120 - placed, 120);
+        const l2 = Math.max(30, Math.floor(len / SNAP) * SNAP);
+        if (l2 <= gap) { props.push({ date: ds, start: min2hm(cur), duration: l2 }); left -= l2; placed += l2; cur += l2; }
+      }
+      cur = Math.max(cur, e0);
+      if (cur >= pe) break;
+    }
+  }
+  if (!props.length) return openModal('Completar objetivo', [el('div', { text: 'No quedan huecos libres esta semana dentro de tu horario de planificación (Ajustes → Horario).' })], [el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal })]);
+  const checks = props.map((x) => { const cb = el('input', { type: 'checkbox' }); cb.checked = true; return { x, cb }; });
+  openModal(`Completar «${p.name}»`, [
+    el('div', { class: 'muted', text: `Te faltan ${fmtH((p.weeklyHours || 0) * 60 - m.done - m.planned)} esta semana. Huecos libres propuestos (puedes desmarcar):` }),
+    el('div', { class: 'glist' }, checks.map(({ x, cb }) => el('label', {}, cb, el('div', {}, el('b', { text: fmtDay(x.date) }), ` ${x.start}–${min2hm(hm2min(x.start) + x.duration)} · ${fmtH(x.duration)}`)))),
+    left > 0 ? el('div', { class: 'muted', text: `No hay más huecos: quedarían ${fmtH(left)} sin planificar.` }) : null,
+  ], [
+    el('button', { type: 'button', class: 'btn', text: 'Cancelar', onclick: closeModal }),
+    el('button', { type: 'submit', class: 'btn primary', text: 'Añadir bloques' }),
+  ], () => {
+    const sel = checks.filter((c) => c.cb.checked);
+    sel.forEach(({ x }) => upsertTask({ kind: 'project', projectId: p.id, title: '', ...x, done: false }));
+    closeModal(); toast(`${sel.length} bloques de «${p.name}» añadidos`);
+  });
+}
+
+// ======================================================================
+// Buscador: citas de iCloud, tareas, bloqueos, proyectos y días de trabajo
+// ======================================================================
+const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+function searchAll(q) {
+  const words = norm(q).split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const hit = (...fields) => { const h = norm(fields.join(' ')); return words.every((w) => h.includes(w)); };
+  const out = [];
+  const from = addDays(new Date(), -365), to = addDays(new Date(), 400);
+  for (const f of calEvents(from, to)) if (hit(f.title, f.location, f.description, f.feed)) out.push({ kind: f.category, date: toYMD(f.start), time: f.allDay ? 'Todo el día' : `${hmOf(f.start)}–${hmOf(f.end)}`, title: f.title, sub: [f.feed ? `Calendario «${f.feed}»` : '', f.location].filter(Boolean).join(' · '), it: { type: f.category, date: toYMD(f.start), s: f.allDay ? null : f.start.getHours() * 60 + f.start.getMinutes(), e: f.allDay ? null : f.end.getHours() * 60 + f.end.getMinutes() || 1440, allDay: f.allDay, title: f.title, sub: f.location, ref: f } });
+  for (const t of liveTasks()) {
+    const nm = isProj(t) ? projName(t) : '';
+    if (!hit(t.title, t.notes, nm, t.category)) continue;
+    out.push({ kind: isBlock(t) ? 'block' : isProj(t) ? 'project' : 'task', date: t.date || t.due || '', time: t.start ? `${t.start}–${endHM(hm2min(t.start) + (t.duration || 60))}` : t.due ? 'Fecha límite' : 'Sin fecha', title: (isBlock(t) ? '🔒 ' : isProj(t) ? '◆ ' + nm + (t.title ? ' · ' : '') : t.done ? '✓ ' : '☐ ') + (t.title || ''), sub: isBlock(t) ? 'Bloqueo de agenda' : isProj(t) ? 'Proyecto' : t.done ? 'Tarea hecha' : 'Tarea', task: t });
+  }
+  for (const w of state.work.events) if (hit(w.title, w.detail, w.kind === 'festivo' ? 'festivo' : 'trabajo')) out.push({ kind: w.kind === 'festivo' ? 'festivo' : 'trabajo', date: w.date, time: w.kind === 'festivo' ? 'Todo el día' : `${w.start}–${w.end}`, title: w.title, sub: w.kind === 'festivo' ? 'Festivo' : [w.trip ? `Viaje ${w.tripDay}/${w.tripDays}` : 'Trabajo', w.detail].filter(Boolean).join(' · '), it: w.kind === 'festivo' ? null : { type: 'trabajo', date: w.date, s: hm2min(w.start), e: hm2min(w.end), title: w.title, sub: w.detail, ref: w } });
+  const today = toYMD(new Date());
+  // primero lo próximo (de hoy en adelante, en orden), después lo pasado (lo más reciente primero)
+  out.sort((a, b) => { const fa = !a.date || a.date >= today, fb = !b.date || b.date >= today; if (fa !== fb) return fa ? -1 : 1; return fa ? (a.date || '9').localeCompare(b.date || '9') || a.time.localeCompare(b.time) : b.date.localeCompare(a.date); });
+  return out;
+}
+function searchModal() {
+  const input = el('input', { type: 'search', placeholder: 'Buscar: médico, dentista, LEMD, Inversiones…', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', style: { width: '100%' } });
+  const list = el('div', { class: 'sr-list' });
+  const today = toYMD(new Date());
+  const draw = () => {
+    const q = input.value.trim();
+    if (q.length < 2) { list.replaceChildren(el('div', { class: 'muted', text: 'Escribe al menos 2 letras. Busca en tus calendarios de iCloud (un año atrás y adelante), tareas, bloqueos, proyectos y días de trabajo.' })); return; }
+    const res = searchAll(q);
+    if (!res.length) { list.replaceChildren(el('div', { class: 'muted', text: `Nada encontrado para «${q}».` })); return; }
+    let pastHdr = false;
+    const items = [el('div', { class: 'muted', text: `${res.length} resultado${res.length > 1 ? 's' : ''}` })];
+    for (const r of res.slice(0, 80)) {
+      if (!pastHdr && r.date && r.date < today) { pastHdr = true; items.push(el('div', { class: 'sr-hdr', text: 'Pasados' })); }
+      items.push(el('button', { type: 'button', class: `sr-row ${r.kind}`, style: r.task && isProj(r.task) ? { '--pc': projColor(projOf(r.task)) } : null, onclick: () => {
+        closeModal();
+        if (r.date) { switchTab('week'); goTo(parseYMD(r.date)); }
+        setTimeout(() => { if (r.task) taskSheet(r.task.id); else if (r.it) detailSheet(r.it); }, 60);
+      } },
+        el('div', { class: 'sr-date' }, el('b', { text: r.date ? fmtDay(r.date) : '—' }), el('small', { text: r.time })),
+        el('div', { class: 'sr-body' }, el('div', { class: 'sr-title', text: r.title }), el('div', { class: 'muted', text: r.sub }))));
+    }
+    if (res.length > 80) items.push(el('div', { class: 'muted', text: 'Hay más resultados: afina la búsqueda.' }));
+    list.replaceChildren(...items);
+  };
+  let tmr; input.addEventListener('input', () => { clearTimeout(tmr); tmr = setTimeout(draw, 150); });
+  openModal('Buscar', [input, list], [el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal })]);
+  draw(); setTimeout(() => input.focus(), 60);
 }
 
 // ======================================================================
@@ -432,10 +661,10 @@ function renderToday() {
       }
       const it = r.it, t = it.task;
       const isNow = ds === todayStr && it.s <= nowMin && it.e > nowMin, past = ds === todayStr && it.e <= nowMin;
-      out.push(el('button', { type: 'button', class: `ag-row ${it.type}${t?.done ? ' done' : ''}${isNow ? ' now' : ''}${past ? ' past' : ''}`, onclick: () => detailSheet(it) },
+      out.push(el('button', { type: 'button', class: `ag-row ${it.type}${t?.done ? ' done' : ''}${isNow ? ' now' : ''}${past ? ' past' : ''}`, style: t && isProj(t) ? { '--pc': projColor(projOf(t)) } : null, onclick: () => detailSheet(it) },
         el('div', { class: 'tm' }, min2hm(it.s), el('small', { text: endHM(Math.min(it.e, 1440)) })),
-        el('div', { class: 'ti' }, (t ? (isBlock(t) ? '🔒 ' : t.done ? '✓ ' : '☐ ') : '') + it.title,
-          el('div', { class: 'su', text: [it.type === 'trabajo' ? it.sub : t ? (isBlock(t) ? 'Bloqueo de agenda · ' : '') + fmtDur(t.duration || 60) : (CAT_LABEL[it.type] || '') + (it.ref?.location ? ' · ' + it.ref.location : '')].filter(Boolean).join(' · ') }),
+        el('div', { class: 'ti' }, (t ? (isBlock(t) ? '🔒 ' : isProj(t) ? '◆ ' : t.done ? '✓ ' : '☐ ') : '') + it.title,
+          el('div', { class: 'su', text: [it.type === 'trabajo' ? it.sub : t ? (isBlock(t) ? 'Bloqueo de agenda · ' : isProj(t) ? 'Proyecto' + (t.title && t.title !== it.title ? ' · ' + t.title : '') + ' · ' : '') + fmtDur(t.duration || 60) : (CAT_LABEL[it.type] || '') + (it.ref?.location ? ' · ' + it.ref.location : '')].filter(Boolean).join(' · ') }),
           conf(it) ? el('div', { class: 'ag-warn', text: '⚠︎ Se solapa con el trabajo' }) : null),
         isNow ? el('span', { class: 'tag', text: 'Ahora' }) : el('span')));
     }
@@ -451,6 +680,7 @@ function render() {
   renderSide();
   if (tab === 'backlog') renderKanban();
   if (tab === 'today') renderToday();
+  if (tab === 'projects') renderProjects();
 }
 
 // ======================================================================
@@ -706,7 +936,11 @@ function openModal(title, body, foot, submit, { sheet = false } = {}) {
   if (!modal.open) modal.showModal();
 }
 function closeModal() { modal.close(); onSubmit = null; }
-let modalOpenedAt = 0;
+let modalOpenedAt = 0, lastPointerDownAt = 0;
+document.addEventListener('pointerdown', () => { lastPointerDownAt = Date.now(); }, true);
+// «Click fantasma»: si la ventana se abrió al levantar el dedo, el click de ese mismo toque llega después
+// y caería sobre lo que haya debajo en la ventana nueva. Se ignora todo click cuyo toque empezó antes de abrirla.
+modal.addEventListener('click', (e) => { if (e.detail > 0 && lastPointerDownAt < modalOpenedAt) { e.stopPropagation(); e.preventDefault(); } }, true);
 // tocar fuera cierra, salvo justo al abrir (p. ej. el 2.º clic de un doble clic en un hueco)
 modal.addEventListener('click', (e) => { if (e.target === modal && Date.now() - modalOpenedAt > 500) closeModal(); });
 const field = (label, input) => el(input.matches?.('input,select,textarea') ? 'label' : 'div', { class: 'field' }, el('span', { text: label }), input);
@@ -728,9 +962,10 @@ function durationSelect(value) {
 
 function taskModal(t, preset = {}) {
   const isNew = !t;
-  const d = { title: '', notes: '', date: '', start: '', duration: 60, priority: '', category: '', due: '', done: false, kind: 'task', ...(t || {}), ...preset };
-  let kind = d.kind === 'block' ? 'block' : 'task';
-  const title = el('input', { class: 'title-input', value: d.title, placeholder: kind === 'block' ? 'Motivo (p. ej. Llevar a Luna al cole)' : 'Título de la tarea', required: true });
+  const d = { title: '', notes: '', date: '', start: '', duration: 60, priority: '', category: '', due: '', done: false, kind: 'task', projectId: '', ...(t || {}), ...preset };
+  let kind = ['block', 'project'].includes(d.kind) ? d.kind : 'task';
+  const projects = liveProjects();
+  const title = el('input', { class: 'title-input', value: kind === 'project' && d.title === projName(d) ? '' : d.title, required: true });
   const notes = el('textarea', { placeholder: 'Notas' }); notes.value = d.notes || '';
   const date = el('input', { type: 'date', value: d.date || '' });
   const start = el('input', { type: 'time', value: d.start || '' });
@@ -738,6 +973,12 @@ function taskModal(t, preset = {}) {
   const due = el('input', { type: 'date', value: d.due || '' });
   const done = el('input', { type: 'checkbox' }); done.checked = !!d.done;
   let prio = d.priority || '', cat = d.category || '';
+  const projOpts = (withNone) => [...(withNone ? [el('option', { value: '', text: '— Ninguno —' })] : []), ...projects.map((p) => el('option', { value: p.id, text: p.name }))];
+  const taskProj = el('select', {}, ...projOpts(true)); taskProj.value = kind === 'task' ? d.projectId || '' : '';
+  const blockProj = el('select', {}, ...projOpts(false)); if (kind === 'project' && d.projectId) blockProj.value = d.projectId;
+  const repeat = el('input', { type: 'checkbox' });
+  const weeks = el('input', { type: 'number', min: 2, max: 52, value: 8, style: { width: '76px' } });
+  const repeatRow = el('div', { class: 'row2' }, el('label', { class: 'chk', style: { color: 'var(--text)' } }, repeat, ' Repetir cada semana'), field('Durante (semanas)', weeks));
   const slotBtn = el('button', { type: 'button', class: 'btn small', text: '⚡ Próximo hueco libre', onclick: () => {
     const s = findSlot(+dur.value, t?.id);
     if (!s) return toast('No hay huecos en los próximos 60 días');
@@ -745,22 +986,28 @@ function taskModal(t, preset = {}) {
   } });
   const unBtn = el('button', { type: 'button', class: 'btn small', text: 'Quitar del calendario', onclick: () => { date.value = ''; start.value = ''; } });
   const errBox = el('div', { class: 'err' });
+  const hint = el('div', { class: 'muted' });
   const classif = el('div', { class: 'section' });
+  const projSection = el('div', { class: 'section' }, el('h3', { text: 'Proyecto' }),
+    projects.length ? field('¿Para qué proyecto?', blockProj) : el('div', { class: 'muted', text: 'Aún no tienes proyectos: créalos en la pestaña «Proyectos».' }),
+    isNew ? repeatRow : null);
+  const titles = { task: ['Nueva tarea', 'Editar tarea'], block: ['Nuevo bloqueo de agenda', 'Editar bloqueo'], project: ['Nuevo bloque de proyecto', 'Editar bloque de proyecto'] };
   const applyKind = () => {
-    classif.hidden = kind === 'block'; unBtn.hidden = kind === 'block';
-    title.placeholder = kind === 'block' ? 'Motivo (p. ej. Llevar a Luna al cole)' : 'Título de la tarea';
-    $('#modal h2') && ($('#modal h2').textContent = (isNew ? (kind === 'block' ? 'Nuevo bloqueo de agenda' : 'Nueva tarea') : (kind === 'block' ? 'Editar bloqueo' : 'Editar tarea')));
-    if (kind === 'block' && !date.value) { const n = new Date(); date.value = toYMD(n); start.value = start.value || min2hm(Math.min(1380, (n.getHours() + 1) * 60)); }
+    classif.hidden = kind !== 'task'; unBtn.hidden = kind !== 'task'; projSection.hidden = kind !== 'project'; slotBtn.hidden = false;
+    title.placeholder = { task: 'Título de la tarea', block: 'Motivo (p. ej. Llevar a Luna al cole)', project: 'Qué harás (opcional, p. ej. Revisar cartera)' }[kind];
+    hint.textContent = { task: '', block: 'Un bloqueo reserva ese tiempo (p. ej. llevar a Luna al cole): no es una tarea, no sale en Pendientes y cuenta como ocupado.', project: 'Tiempo reservado para un proyecto: cuenta para su objetivo semanal y en los informes.' }[kind];
+    const h2 = $('#modal h2'); if (h2) h2.textContent = titles[kind][isNew ? 0 : 1];
+    if (kind !== 'task' && !date.value) { const n = new Date(); date.value = toYMD(n); start.value = start.value || min2hm(Math.min(1380, (n.getHours() + 1) * 60)); }
   };
   classif.append(el('h3', { text: 'Clasificación' }),
     field('Prioridad', seg(PRIORITIES, prio, (v) => { prio = v; })),
     field('Categoría', seg([...CATEGORIES.map((c) => ({ id: c, label: c })), { id: '', label: 'Ninguna' }], cat, (v) => { cat = v; })),
+    projects.length ? field('Proyecto (opcional: su tiempo cuenta para el proyecto)', taskProj) : null,
     el('div', { class: 'row2' }, field('Fecha límite', due), el('label', { class: 'chk', style: { alignSelf: 'end', paddingBottom: '8px' } }, done, ' Hecha')));
-  const kindSeg = seg([{ id: 'task', label: '☐ Tarea' }, { id: 'block', label: '🔒 Bloqueo de agenda' }], kind, (v) => { kind = v; applyKind(); });
+  const kindSeg = seg([{ id: 'task', label: '☐ Tarea' }, { id: 'block', label: '🔒 Bloqueo' }, { id: 'project', label: '◆ Proyecto' }], kind, (v) => { kind = v; applyKind(); });
   const body = [
-    kindSeg,
-    el('div', { class: 'muted', text: 'Un bloqueo reserva ese tiempo (p. ej. llevar a Luna al cole): no es una tarea, no sale en Pendientes y cuenta como ocupado.' }),
-    title,
+    kindSeg, hint, title,
+    projSection,
     el('div', { class: 'section' }, el('h3', { text: 'Programación' }),
       el('div', { class: 'row3' }, field('Día', date), field('Hora inicio', start), field('Duración', dur)),
       el('div', { class: 'seg' }, slotBtn, unBtn)),
@@ -769,27 +1016,36 @@ function taskModal(t, preset = {}) {
     field('Notas', notes),
     t?.google ? el('div', { class: 'muted', text: 'Importada de Google Tasks. Al marcarla como hecha se completa también allí.' }) : null,
   ];
+  const what = () => ({ task: 'esta tarea', block: 'este bloqueo', project: 'este bloque' }[kind]);
   const foot = [
-    !isNew ? el('div', { class: 'left' }, el('button', { type: 'button', class: 'btn danger', text: 'Eliminar', onclick: () => { if (confirm(kind === 'block' ? '¿Eliminar este bloqueo?' : '¿Eliminar esta tarea?')) { deleteTask(t.id); closeModal(); toast(kind === 'block' ? 'Bloqueo eliminado' : 'Tarea eliminada'); } } })) : null,
+    !isNew ? el('div', { class: 'left' }, el('button', { type: 'button', class: 'btn danger', text: 'Eliminar', onclick: () => { if (confirm(`¿Eliminar ${what()}?`)) { deleteTask(t.id); closeModal(); toast('Eliminado'); } } })) : null,
     el('button', { type: 'button', class: 'btn', text: 'Cancelar', onclick: closeModal }),
     el('button', { type: 'submit', class: 'btn primary', text: 'Guardar' }),
   ];
-  openModal(isNew ? 'Nueva tarea' : 'Editar tarea', body, foot, () => {
-    if (!title.value.trim()) { title.focus(); errBox.textContent = 'Escribe un título.'; return; }
+  openModal(titles[kind][isNew ? 0 : 1], body, foot, () => {
     let st = start.value, dt = date.value;
-    if (kind === 'block' && (!dt || !st)) { errBox.textContent = 'Un bloqueo necesita día y hora.'; return; }
+    if (kind !== 'project' && !title.value.trim()) { title.focus(); errBox.textContent = 'Escribe un título.'; return; }
+    if (kind !== 'task' && (!dt || !st)) { errBox.textContent = 'Necesita día y hora.'; return; }
+    if (kind === 'project' && !blockProj.value) { errBox.textContent = 'Primero crea un proyecto en la pestaña «Proyectos».'; return; }
     if (dt && !st) st = '09:00';
     if (!dt) st = '';
     const wasDone = !!t?.done;
-    const saved = kind === 'block'
-      ? upsertTask({ id: t?.id, kind: 'block', title: title.value.trim(), notes: notes.value, date: dt, start: st, duration: +dur.value, priority: '', category: '', due: '', done: false })
-      : upsertTask({ id: t?.id, kind: 'task', title: title.value.trim(), notes: notes.value, date: dt || null, start: st || null, duration: +dur.value, priority: prio, category: cat, due: due.value, done: done.checked, doneAt: done.checked ? (t?.doneAt || Date.now()) : null });
+    let saved;
+    if (kind === 'block') saved = upsertTask({ id: t?.id, kind: 'block', title: title.value.trim(), notes: notes.value, date: dt, start: st, duration: +dur.value, priority: '', category: '', due: '', done: false, projectId: '' });
+    else if (kind === 'project') {
+      const base = { kind: 'project', projectId: blockProj.value, title: title.value.trim(), notes: notes.value, start: st, duration: +dur.value, priority: '', category: '', due: '', done: false };
+      if (isNew && repeat.checked) {
+        const n = Math.max(2, Math.min(52, +weeks.value || 8)), groupId = uid();
+        for (let i = 0; i < n; i++) saved = upsertTask({ ...base, groupId, date: toYMD(addDays(parseYMD(dt), 7 * i)) });
+        toast(`${n} bloques creados (uno por semana)`);
+      } else saved = upsertTask({ id: t?.id, ...base, date: dt });
+    } else saved = upsertTask({ id: t?.id, kind: 'task', title: title.value.trim(), notes: notes.value, date: dt || null, start: st || null, duration: +dur.value, priority: prio, category: cat, due: due.value, done: done.checked, doneAt: done.checked ? (t?.doneAt || Date.now()) : null, projectId: taskProj.value || '' });
     if (saved.google && wasDone !== done.checked && G.isSignedIn()) G.setTaskCompleted(saved.google.listId, saved.google.taskId, done.checked).catch(() => {});
     closeModal();
     if (dt && st && tab === 'week') goTo(parseYMD(dt));
   });
   applyKind();
-  if (preset.focusSchedule) setTimeout(() => date.focus(), 50); else if (isNew) setTimeout(() => title.focus(), 50);
+  if (preset.focusSchedule) setTimeout(() => date.focus(), 50); else if (isNew && kind !== 'project') setTimeout(() => title.focus(), 50);
 }
 
 const CAT_LABEL = { trabajo: 'Trabajo · programación anual', familia: 'Luna / familia', personal: 'Personal', festivo: 'Festivo', task: 'Tarea' };
@@ -849,16 +1105,18 @@ function taskSheet(id) {
   if (t.category) meta.push(el('span', { class: `tag cat-${t.category}`, text: t.category }));
   if (t.due) meta.push(el('span', { class: 'tag', text: 'Fecha límite: ' + fmtDay(t.due) }));
   if (t.google) meta.push(el('span', { class: 'tag', text: 'Google Tasks' }));
-  const blkKind = isBlock(t);
+  const blkKind = isBlock(t), prjKind = isProj(t), reserve = blkKind || prjKind;
+  if (!prjKind && projOf(t) && !projOf(t).deleted) meta.unshift(el('span', { class: 'tag', text: '◆ ' + projName(t) }));
+  const groupLeft = prjKind && t.groupId ? liveTasks().filter((x) => x.groupId === t.groupId && x.date >= t.date).length : 0;
   const body = [
-    el('div', { class: 'sheet-cat' }, el('i', { class: `sw ${blkKind ? 'block' : t.done ? 'done' : 'task'}` }), blkKind ? '🔒 Bloqueo de agenda' : t.done ? 'Tarea hecha' : 'Tarea pendiente'),
+    el('div', { class: 'sheet-cat' }, prjKind ? el('i', { class: 'sw proj', style: { '--pc': projColor(projOf(t)) } }) : el('i', { class: `sw ${blkKind ? 'block' : t.done ? 'done' : 'task'}` }), blkKind ? '🔒 Bloqueo de agenda' : prjKind ? `◆ Tiempo de proyecto «${projName(t)}»` : t.done ? 'Tarea hecha' : 'Tarea pendiente'),
     el('div', { class: 'sheet-when', text: sched ? `${fmtDayLong(t.date)} · ${t.start}–${endHM(hm2min(t.start) + (t.duration || 60))} (${fmtDur(t.duration || 60)})` : `Sin hora en el calendario · ${fmtDur(t.duration || 60)}` }),
     meta.length ? el('div', { class: 'meta' }, meta) : null,
     t.notes ? el('div', { class: 'sheet-desc', text: t.notes }) : null,
     el('div', { class: 'sheet-actions' },
-      blkKind ? null : act(t.done ? '↺ Marcar pendiente' : '✓ Marcar hecha', () => { toggleDone(t); taskSheet(id); }, t.done ? '' : 'primary'),
+      reserve ? null : act(t.done ? '↺ Marcar pendiente' : '✓ Marcar hecha', () => { toggleDone(t); taskSheet(id); }, t.done ? '' : 'primary'),
       act(sched ? '⇄ Mover: tocar nuevo hueco' : '📅 Elegir hueco en el calendario', () => { closeModal(); enterMoveMode(id); }),
-      blkKind ? null : act('⚡ Próximo hueco libre', () => {
+      reserve ? null : act('⚡ Próximo hueco libre', () => {
         const slot = findSlot(t.duration || 60, id);
         if (!slot) return toast('No hay huecos libres en 60 días');
         upd(slot, `→ ${fmtDay(slot.date)} ${slot.start}`); if (tab === 'week') goTo(parseYMD(slot.date));
@@ -867,11 +1125,15 @@ function taskSheet(id) {
       sched ? el('div', { class: 'sheet-row' },
         act('− 15 min', () => upd({ start: min2hm(Math.max(0, hm2min(t.start) - 15)) })), act('+ 15 min', () => upd({ start: min2hm(Math.min(1425, hm2min(t.start) + 15)) })),
         act('Más corta', () => upd({ duration: Math.max(15, (t.duration || 60) - 15) })), act('Más larga', () => upd({ duration: (t.duration || 60) + 15 }))) : null,
-      blkKind ? act('🗑 Eliminar bloqueo', () => { deleteTask(id); closeModal(); toast('Bloqueo eliminado'); }, 'danger')
+      prjKind && groupLeft > 1 ? el('div', { class: 'sheet-row' },
+        act('🗑 Eliminar este', () => { deleteTask(id); closeModal(); toast('Bloque eliminado'); }, 'danger'),
+        act(`🗑 Este y los ${groupLeft - 1} siguientes`, () => { liveTasks().filter((x) => x.groupId === t.groupId && x.date >= t.date).forEach((x) => deleteTask(x.id)); closeModal(); toast(`${groupLeft} bloques eliminados`); }, 'danger'))
+      : prjKind ? act('🗑 Eliminar bloque', () => { deleteTask(id); closeModal(); toast('Bloque eliminado'); }, 'danger')
+      : blkKind ? act('🗑 Eliminar bloqueo', () => { deleteTask(id); closeModal(); toast('Bloqueo eliminado'); }, 'danger')
         : sched ? act('Quitar del calendario', () => upd({ date: null, start: null }, 'Vuelve a «Por programar»')) : null),
     el('div', { class: 'muted', text: 'Consejo: en el calendario también puedes mantener pulsada la tarea y arrastrarla, o estirarla desde su borde inferior.' }),
   ];
-  openModal(t.title || '(sin título)', body, [
+  openModal(prjKind ? projName(t) + (t.title && t.title !== projName(t) ? ' · ' + t.title : '') : t.title || '(sin título)', body, [
     act('✎ Editar todo', () => taskModal(state.tasks[id])),
     act('Cerrar', closeModal, 'primary'),
   ], null, { sheet: true });
@@ -1313,7 +1575,7 @@ function switchTab(t) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + t));
   document.body.classList.toggle('tab-backlog', t === 'backlog');
-  document.body.classList.toggle('tab-today', t === 'today');
+  document.body.classList.toggle('tab-today', t === 'today' || t === 'projects');
   lsSet('cfs.tab', t);
   render();
 }
@@ -1386,6 +1648,12 @@ for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev
   // Safari: evitar que el pellizco haga zoom de toda la página
   for (const ev of ['gesturestart', 'gesturechange']) sc.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
 }
+$('#search-btn').onclick = searchModal;
+$('#proj-add').onclick = () => projectModal(null);
+document.querySelectorAll('#period-seg button').forEach((b) => { b.onclick = () => { period = b.dataset.p; periodAnchor = null; renderProjects(); }; });
+const shiftPeriod = (n) => { const a = periodAnchor ? new Date(periodAnchor) : new Date(); if (period === 'week') a.setDate(a.getDate() + 7 * n); else if (period === 'month') a.setMonth(a.getMonth() + n, 1); else a.setFullYear(a.getFullYear() + n); periodAnchor = a; renderProjects(); };
+$('#period-prev').onclick = () => shiftPeriod(-1);
+$('#period-next').onclick = () => shiftPeriod(1);
 $('#today-prev').onclick = () => { todayAnchor = addDays(todayAnchor || new Date(), -1); renderToday(); };
 $('#today-next').onclick = () => { todayAnchor = addDays(todayAnchor || new Date(), 1); renderToday(); };
 $('#today-now').onclick = () => { todayAnchor = null; renderToday(); };
@@ -1416,6 +1684,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowRight') step(1);
   else if (e.key === 't' || e.key === 'T') $('#today').click();
   else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); taskModal(null); }
+  else if (e.key === '/' || (e.key === 'f' && (e.metaKey || e.ctrlKey))) { e.preventDefault(); searchModal(); }
 });
 let rT;
 window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { render(); }, 120); });
@@ -1434,7 +1703,7 @@ if (+lsGet(ZOOM_KEY)) document.documentElement.style.setProperty('--hour', Math.
 renderFilters();
 render();
 scrollToMorning();
-if (['today', 'backlog'].includes(lsGet('cfs.tab'))) switchTab(lsGet('cfs.tab'));
+if (['today', 'backlog', 'projects'].includes(lsGet('cfs.tab'))) switchTab(lsGet('cfs.tab'));
 window.__appReady = true;
 $('#boot').hidden = true;
 if (getClientId()) { if (G.isSignedIn()) syncNow(false); else setSync('pending', 'Pulsa para conectar con Google y sincronizar'); }

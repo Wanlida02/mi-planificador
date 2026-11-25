@@ -965,6 +965,13 @@ function settingsModal() {
     try { const r = await caldavCall('/caldav/calendars'); cdStatus.textContent = `✓ Conectado. Calendarios: ${r.calendars.join(', ')}`; render(); }
     catch (e) { cdStatus.textContent = '⚠︎ ' + e.message; }
   } });
+  const cdOpen = el('button', { type: 'button', class: 'btn small', text: '🌐 Abrir mi worker', onclick: () => {
+    const pErr = proxyError(proxy.value);
+    if (pErr || !proxy.value.trim()) { cdStatus.textContent = '⚠︎ Primero pon en «Proxy para iCloud» la URL de tu worker (https://ics-proxy.….workers.dev).'; return; }
+    const url = proxy.value.trim().split('?')[0].replace(/\/+$/, '') + '/caldav/calendars';
+    cdStatus.textContent = 'Abierto: ' + url + ' — si ves «Código privado incorrecto…», el código nuevo del worker está bien desplegado.';
+    window.open(url, '_blank');
+  } });
   const clientId = el('input', { value: getClientId(), placeholder: 'xxxx.apps.googleusercontent.com', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
   const clientErr = el('div', { class: 'err' });
   const gtAuto = el('input', { type: 'checkbox' }); gtAuto.checked = s.gtasksAuto !== false;
@@ -1005,7 +1012,7 @@ function settingsModal() {
       field('Proxy para iCloud: la URL de tu worker de Cloudflare (https://….workers.dev)', proxy), proxyErr, moveBtn),
     el('div', { class: 'section' }, el('h3', { text: '✏️ Mover eventos de iCloud' }),
       el('div', { class: 'muted', text: 'Para mover eventos de tu calendario de Apple desde aquí, tu worker de Cloudflare necesita tu Apple ID y una contraseña específica de app (guardados como secretos allí, nunca en la app). Pasos en el README.' }),
-      field('Código privado', cdToken), el('div', { class: 'seg' }, cdGen, cdTest), cdStatus),
+      field('Código privado', cdToken), el('div', { class: 'seg' }, cdGen, cdTest, cdOpen), cdStatus),
     el('div', { class: 'section' }, el('h3', { text: '🔔 Avisos de solapes' }),
       el('div', { class: 'muted', text: 'Al abrir la app (y cada hora con ella abierta) se revisa la programación y tus calendarios. Si un día de trabajo choca con una cita, aparece un aviso y se marca en rojo.' }),
       'Notification' in window ? el('button', { type: 'button', class: 'btn small', text: Notification.permission === 'granted' ? '✓ Notificaciones activadas' : 'Activar notificaciones del sistema', disabled: Notification.permission === 'granted', onclick: async (e) => {

@@ -28,7 +28,9 @@ En el iPhone: Safari → Compartir → **Añadir a pantalla de inicio**, para us
 
 ### 2. Cargar la programación anual
 ⚙︎ Ajustes → **Programación anual** → elige `Programación Anual 2026.xlsx` desde iCloud Drive.
-**Actualización diaria**: en el iPhone, app Archivos → mantén pulsado el Excel → **Compartir** → arriba elige **Colaborar** → *Opciones de compartir*: **Cualquiera con el enlace** y **Solo ver** → **Copiar enlace**. Pégalo en ⚙︎ Ajustes → *Enlace de iCloud Drive al Excel* (necesita el proxy del paso 3). Si sustituyes el archivo por uno nuevo, el enlace cambia: vuelve a pegarlo.
+**Actualización automática desde Teams (recomendada)**: un flujo de Power Automate de tu cuenta del trabajo te envía el Excel cada mañana a tu Gmail con el asunto `[Planificador] Programación Anual`. La app busca ese correo cada vez que se abre (y cada hora mientras está abierta) y carga el adjunto si el correo es nuevo. Actívalo en ⚙︎ Ajustes → *Actualizar automáticamente desde mi Gmail*. Hay que tener habilitada la **Gmail API** en Google Cloud (paso 4).
+
+**Alternativa con iCloud Drive**: en el iPhone, app Archivos → mantén pulsado el Excel → **Compartir** → arriba elige **Colaborar** → *Opciones de compartir*: **Cualquiera con el enlace** y **Solo ver** → **Copiar enlace**. Pégalo en ⚙︎ Ajustes → *Enlace de iCloud Drive al Excel* (necesita el proxy del paso 3). Si sustituyes el archivo por uno nuevo, el enlace cambia: vuelve a pegarlo.
 
 Cuando llegue la de 2027, cárgala igual: se sustituyen los años que traiga el archivo y se conservan los demás.
 Si el Excel cambia, vuelve a cargarlo.
@@ -51,7 +53,7 @@ Si el Excel cambia, vuelve a cargarlo.
 Necesitas un *Client ID* de OAuth propio (gratuito):
 
 1. <https://console.cloud.google.com> → crea un proyecto (p. ej. “Planificador”).
-2. **APIs y servicios → Biblioteca**: habilita **Google Tasks API** y **Google Drive API**.
+2. **APIs y servicios → Biblioteca**: habilita **Google Tasks API**, **Google Drive API** y **Gmail API** (solo lectura, para el Excel que llega por correo).
 3. **Pantalla de consentimiento de OAuth** (Google Auth Platform): tipo **Externo**; en **Público** añade tu Gmail como *usuario de prueba*.
 4. **Credenciales → Crear credenciales → ID de cliente de OAuth** → tipo **Aplicación web**.
    - *Orígenes de JavaScript autorizados*: `https://wanlida02.github.io`

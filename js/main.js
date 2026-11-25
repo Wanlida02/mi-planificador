@@ -632,6 +632,18 @@ function settingsModal() {
   const proxy = el('input', { value: s.proxy, placeholder: 'https://ics-proxy.tu-usuario.workers.dev' });
   const excelLink = el('input', { value: s.excelLink || '', placeholder: 'https://www.icloud.com/iclouddrive/…#Programacion_Anual_2026' });
   const linkStatus = el('div', { class: 'muted', text: s.excelLink ? `Actualización diaria activa. Última comprobación: ${lastExcelCheck() ? new Date(lastExcelCheck()).toLocaleString('es-ES') : 'nunca'}.` : 'Sin enlace: la programación solo cambia cuando cargas el archivo a mano.' });
+  const gmailOn = el('input', { type: 'checkbox' }); gmailOn.checked = !!s.gmailEnabled;
+  const gmailQuery = el('input', { value: s.gmailQuery || DEFAULT_GMAIL_QUERY });
+  const gmailStatus = el('div', { class: 'muted', text: state.work.source === 'gmail' ? `Último Excel leído del correo del ${new Date(state.work.sourceDate).toLocaleString('es-ES')}.` : 'Se comprueba al abrir la app y cada hora (necesita la conexión con Google).' });
+  const gmailBtn = el('button', { type: 'button', class: 'btn small', text: '↻ Buscar ahora en Gmail', onclick: async () => {
+    updateSettings({ gmailEnabled: true, gmailQuery: gmailQuery.value.trim() || DEFAULT_GMAIL_QUERY }); gmailOn.checked = true;
+    gmailStatus.textContent = 'Buscando…';
+    try {
+      if (!G.isSignedIn()) await G.signIn(getClientId());
+      const n = await refreshFromGmail(true);
+      gmailStatus.textContent = n ? excelMsg(n, n.fileName) : 'No encuentro ningún correo con un Excel adjunto que cumpla la búsqueda.';
+    } catch (e) { gmailStatus.textContent = '⚠︎ ' + e.message; }
+  } });
   const linkBtn = el('button', { type: 'button', class: 'btn small', text: '↻ Actualizar ahora desde el enlace', onclick: async () => {
     updateSettings({ excelLink: excelLink.value.trim(), proxy: proxy.value.trim() });
     linkStatus.textContent = 'Descargando…';
@@ -656,7 +668,10 @@ function settingsModal() {
     el('div', { class: 'section', style: { borderTop: 0, paddingTop: 0 } }, el('h3', { text: '📄 Programación anual (Excel)' }),
       el('div', { class: 'muted', text: 'Elige “Programación Anual 2026.xlsx” desde iCloud Drive. Se marcan los días con tus iniciales: viaje de varios días y jornada de un día. Al cargar otro año se conservan los anteriores.' }),
       fileInput, workStatus,
-      field('Enlace de iCloud Drive al Excel (actualización diaria automática)', excelLink), linkBtn, linkStatus,
+      el('label', { class: 'chk', style: { color: 'var(--text)' } }, gmailOn, ' Actualizar automáticamente desde mi Gmail (correo diario de Power Automate)'),
+      field('Búsqueda en Gmail', gmailQuery), gmailBtn, gmailStatus,
+      el('details', {}, el('summary', { class: 'muted', text: 'Alternativa: enlace de iCloud Drive' }),
+        field('Enlace de iCloud Drive al Excel', excelLink), linkBtn, linkStatus),
       el('div', { class: 'row2' }, field('Mis iniciales', initials), el('span')),
       el('div', { class: 'row2' }, field('Viaje: desde', tS), field('Viaje: hasta', tE)),
       el('div', { class: 'row2' }, field('Día suelto: desde', dS), field('Día suelto: hasta', dE))),
@@ -694,6 +709,7 @@ function settingsModal() {
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
       proxy: proxy.value.trim(), excelLink: excelLink.value.trim(),
+      gmailEnabled: gmailOn.checked, gmailQuery: gmailQuery.value.trim() || DEFAULT_GMAIL_QUERY,
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
     });
@@ -722,19 +738,36 @@ async function refreshExcel(force = false) {
   try { localStorage.setItem(EXCEL_KEY, String(Date.now())); } catch {}
   return n;
 }
+const DEFAULT_GMAIL_QUERY = 'subject:"[Planificador]" has:attachment';
+/** Lee el Excel del último correo de Power Automate. Solo descarga si es un correo nuevo. */
+async function refreshFromGmail(force = false) {
+  const s = state.settings;
+  if (!s.gmailEnabled || !G.isSignedIn()) return null;
+  const r = await G.latestExcelFromGmail(s.gmailQuery || DEFAULT_GMAIL_QUERY, force ? null : state.work.sourceMsgId);
+  if (!r || r.unchanged) return null;
+  const n = await importExcel(r.buffer, r.filename, { source: 'gmail', sourceMsgId: r.id, sourceDate: r.date.getTime() });
+  return { ...n, fileName: r.filename };
+}
+let autoBusy = false;
 async function autoRefreshExcel() {
-  try { const n = await refreshExcel(false); if (n) toast('Programación actualizada desde iCloud Drive'); }
-  catch (e) { toast('⚠︎ ' + e.message, 5000); }
+  if (autoBusy) return; autoBusy = true;
+  try {
+    let n = await refreshFromGmail(false);
+    if (n) toast('📥 Programación actualizada desde el correo');
+    else if (!state.settings.gmailEnabled) { n = await refreshExcel(false); if (n) toast('Programación actualizada desde iCloud Drive'); }
+  } catch (e) { toast('⚠︎ Programación: ' + e.message, 5000); }
+  finally { autoBusy = false; }
 }
 
-async function importExcel(buf, fileName) {
+async function importExcel(buf, fileName, meta = {}) {
   if (!window.XLSX) throw new Error('No se ha cargado la librería de Excel (¿sin conexión?)');
   const wb = XLSX.read(buf, { type: 'array', cellStyles: true });
   const s = state.settings;
   const r = parseProgramacion(wb, { initials: s.initials, tripHours: [s.tripStart, s.tripEnd], dayHours: [s.dayWorkStart, s.dayWorkEnd] });
   if (!r.years.length) throw new Error('No encuentro ninguna hoja “Programación AAAA” en el archivo');
   const keep = state.work.events.filter((e) => !r.years.includes(+e.date.slice(0, 4)));
-  setWork({ events: [...keep, ...r.events], fileName, importedAt: Date.now() });
+  setWork({ events: [...keep, ...r.events], fileName, importedAt: Date.now(), source: meta.source || 'manual',
+    sourceMsgId: meta.sourceMsgId || state.work.sourceMsgId || null, sourceDate: meta.sourceDate || state.work.sourceDate || null });
   return { work: r.events.filter((e) => e.kind === 'trabajo').length, fest: r.events.filter((e) => e.kind === 'festivo').length, years: r.years, cancelled: r.cancelled.length };
 }
 
@@ -799,6 +832,7 @@ async function syncNow(interactive = false) {
     if (mergeRemote(remote)) render();
     await G.driveSave(exportable());
     setSync('ok', 'Sincronizado ' + new Date().toLocaleTimeString('es-ES'));
+    autoRefreshExcel();
   } catch (e) { setSync('err', e.message); if (interactive) toast('Sincronización: ' + e.message, 5000); }
   finally { syncing = false; }
 }
@@ -877,5 +911,5 @@ if (getClientId()) { if (G.isSignedIn()) syncNow(false); else setSync('pending',
 refreshFeeds().then((c) => { if (c) render(); });
 setTimeout(() => { if (window.XLSX) autoRefreshExcel(); else window.addEventListener('load', autoRefreshExcel, { once: true }); }, 1500);
 setInterval(() => { if (document.visibilityState === 'visible') autoRefreshExcel(); }, 3600 * 1000);
-if (!state.work.importedAt && !liveTasks().length) setTimeout(() => toast('Empieza en ⚙︎ Ajustes: carga tu programación y tus calendarios', 5000), 600);
+if (!state.work.importedAt && !liveTasks().length && !state.settings.gmailEnabled) setTimeout(() => toast('Empieza en ⚙︎ Ajustes: carga tu programación y tus calendarios', 5000), 600);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

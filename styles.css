@@ -72,6 +72,9 @@ h2 { font-size: 14px; margin: 0; }
 
 .notice { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 16px; background: var(--festivo-bg); color: var(--festivo-ink); font-size: 13px; }
 .notice[hidden] { display: none; }
+.notice.info { background: var(--trabajo-bg); color: var(--trabajo-ink); }
+.diff-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; text-align: left; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px; background: var(--surface); font: inherit; color: inherit; cursor: pointer; margin-top: 6px; }
+.diff-row.add { border-left-color: var(--done-bd); } .diff-row.del { border-left-color: var(--now); } .diff-row.chg { border-left-color: var(--trabajo-bd); }
 .movebar { background: var(--task-bg); color: var(--task-ink); position: sticky; top: 0; z-index: 30; }
 body.move-mode .day-col { cursor: copy; background-image: repeating-linear-gradient(to bottom, color-mix(in srgb, var(--task-bd) 35%, transparent) 0 1px, transparent 1px calc(var(--hour) / 4)); }
 body.move-mode .ev { opacity: .55; }

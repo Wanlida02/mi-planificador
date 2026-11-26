@@ -4,6 +4,7 @@ import { refreshFeeds, feedEvents, feedStatus, feedProblems, clearFeedCache } fr
 import * as G from './google.js';
 import * as LF from './localfile.js';
 import { parseVacations, vacationOn, summary as vacSummary } from './vacaciones.js';
+import { diffWork, diffSummary } from './workdiff.js';
 import { normalizeClientId, isCalendarLink, proxyError, feedUrlError, el, toast, toYMD, fmtDayLong, parseYMD, addDays, mondayOf, hm2min, min2hm, fmtDur, fmtDay, DOW, MONTHS } from './util.js';
 
 const $ = (s) => document.querySelector(s);
@@ -343,7 +344,9 @@ function updateConflicts() {
   clearTimeout(notifyT);
   notifyT = setTimeout(() => {
     const seen = readSet(SEEN_KEY);
-    const fresh = conflicts.filter((c) => c.kind !== 'tarea' && !seen.has(c.key));
+    // solo avisa de lo importante: trabajo en día libre, choques con Luna/Familia, con un bloqueo o con otro trabajo
+    const important = (c) => c.kind === 'vacaciones' || c.kind === 'trabajo' || (c.kind === 'cita' && c.other.type === 'familia') || (c.kind === 'tarea' && isBlock(c.other.task));
+    const fresh = conflicts.filter((c) => important(c) && !seen.has(c.key));
     conflicts.forEach((c) => seen.add(c.key)); writeSet(SEEN_KEY, seen);
     if (!fresh.length) return;
     const c = fresh[0];
@@ -355,11 +358,54 @@ function updateConflicts() {
   }, 400);
 }
 
-async function systemNotify(title, body) {
+// ---------- Avisos: tareas de prioridad alta y eventos de Luna/Familia ----------
+const NOTIF_KEY = 'cfs.notified';
+let notifTimers = [];
+function upcomingAlerts() {
+  const s = state.settings, lead = (s.notifyLead || 15) * 60000, now = Date.now();
+  const from = new Date(now - 60 * 60000), to = new Date(now + 26 * 3600000);
+  const out = [];
+  if (s.notifyHigh !== false) for (const t of liveTasks()) {
+    if (!isScheduled(t) || t.done || isReserve(t) || t.priority !== 'alta') continue;
+    const st = parseYMD(t.date); st.setMinutes(hm2min(t.start));
+    if (st >= from && st <= to) out.push({ key: `t:${t.id}:${t.date}T${t.start}`, at: st.getTime() - lead, start: st.getTime(), title: `⭐ ${t.title}`, body: `${t.start} · tarea de prioridad alta` });
+  }
+  if (s.notifyFam !== false) for (const f of calEvents(from, to)) {
+    if (f.category !== 'familia') continue;
+    if (f.allDay) { const d8 = new Date(f.start); d8.setHours(8, 0, 0, 0); out.push({ key: `f:${f.id}`, at: d8.getTime(), start: d8.getTime() + 12 * 3600000, title: `👧 Hoy: ${f.title}`, body: 'Luna / Familia · todo el día' }); }
+    else out.push({ key: `f:${f.id}:${f.start.getTime()}`, at: f.start.getTime() - lead, start: f.start.getTime(), title: `👧 ${f.title}`, body: `${hmOf(f.start)}${f.location ? ' · ' + f.location.split(/\n|,/)[0].trim().slice(0, 40) : ''} · Luna / Familia` });
+  }
+  return out;
+}
+function scheduleAlerts() {
+  notifTimers.forEach(clearTimeout); notifTimers = [];
+  let sent = {}; try { sent = JSON.parse(localStorage.getItem(NOTIF_KEY)) || {}; } catch {}
+  const now = Date.now();
+  for (const k of Object.keys(sent)) if (now - sent[k] > 3 * 864e5) delete sent[k];
+  const fire = (a) => {
+    let cur = {}; try { cur = JSON.parse(localStorage.getItem(NOTIF_KEY)) || {}; } catch {}
+    if (cur[a.key]) return;
+    cur[a.key] = Date.now(); try { localStorage.setItem(NOTIF_KEY, JSON.stringify(cur)); } catch {}
+    const mins = Math.round((a.start - Date.now()) / 60000);
+    const body = a.body + (mins > 0 && mins < 180 ? ` · en ${mins} min` : '');
+    systemNotify(a.title, body, a.key);
+    if (document.visibilityState === 'visible') toast(`🔔 ${a.title} · ${body}`, 6000);
+  };
+  for (const a of upcomingAlerts()) {
+    if (sent[a.key] || a.start <= now) continue;            // ya avisado o ya empezado: no molestar
+    if (a.at <= now) fire(a);                                // tocaba mientras la app estaba cerrada
+    else if (a.at - now < 26 * 3600000) notifTimers.push(setTimeout(() => fire(a), a.at - now));
+  }
+  try { localStorage.setItem(NOTIF_KEY, JSON.stringify(sent)); } catch {}
+}
+let alertT;
+const scheduleAlertsSoon = () => { clearTimeout(alertT); alertT = setTimeout(scheduleAlerts, 800); };
+
+async function systemNotify(title, body, tag = 'conflictos') {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
-    if (reg) await reg.showNotification(title, { body, icon: 'icon-512.png', badge: 'icon-180.png', tag: 'conflictos' });
+    if (reg) await reg.showNotification(title, { body, icon: 'icon-512.png', badge: 'icon-180.png', tag });
     else new Notification(title, { body, icon: 'icon-512.png' });
   } catch {}
 }
@@ -393,6 +439,13 @@ function conflictsModal() {
 function renderNotice() {
   const n = $('#notice');
   const probs = feedProblems();
+  const wd = checkWorkDiff();
+  if (!probs.length && wd) {
+    n.hidden = false; n.classList.add('info');
+    n.replaceChildren(el('span', { text: `📄 La programación ha cambiado: ${diffSummary(wd)}` }), el('button', { type: 'button', class: 'btn small', text: 'Ver cambios', onclick: workDiffModal }));
+    return;
+  }
+  n.classList.remove('info');
   if (!probs.length) { n.hidden = true; return; }
   n.hidden = false;
   n.replaceChildren(el('span', { text: `⚠︎ No se pudo cargar ${probs.map((p) => `«${p.f.name}»`).join(', ')}: ${probs[0].st.error}` }),
@@ -679,6 +732,7 @@ function renderToday() {
 }
 
 function render() {
+  scheduleAlertsSoon();
   renderNotice();
   updateConflicts();
   updateSuggestBtns();
@@ -1400,6 +1454,9 @@ function settingsModal() {
       if (!ok) { state.vac.sourceModified = prev; vacStatus.textContent = `No encuentro «${G.VAC_FILE}» en tu Drive. En el artefacto de vacaciones activa «Guardar en Drive».`; } else vacMsg();
     } catch (e) { vacStatus.textContent = '⚠︎ ' + e.message; }
   } });
+  const nHigh = el('input', { type: 'checkbox' }); nHigh.checked = s.notifyHigh !== false;
+  const nFam = el('input', { type: 'checkbox' }); nFam.checked = s.notifyFam !== false;
+  const nLead = el('select', {}, ...[5, 10, 15, 30, 60].map((m) => el('option', { value: m, text: m < 60 ? `${m} minutos` : '1 hora' }))); nLead.value = String(s.notifyLead || 15);
   const cdToken = el('input', { value: s.caldavToken || '', placeholder: 'código privado (el mismo que PLANNER_TOKEN en Cloudflare)', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
   const cdStatus = el('div', { class: 'muted', text: s.caldavToken ? 'Configurado. Pulsa «Probar conexión» para comprobarlo.' : 'Sin configurar: los eventos de iCloud solo se pueden ver.' });
   const cdGen = el('button', { type: 'button', class: 'btn small', text: '🎲 Generar código', onclick: () => {
@@ -1470,11 +1527,16 @@ function settingsModal() {
     el('div', { class: 'section' }, el('h3', { text: '✏️ Mover eventos de iCloud' }),
       el('div', { class: 'muted', text: 'Para mover eventos de tu calendario de Apple desde aquí, tu worker de Cloudflare necesita tu Apple ID y una contraseña específica de app (guardados como secretos allí, nunca en la app). Pasos en el README.' }),
       field('Código privado', cdToken), el('div', { class: 'seg' }, cdGen, cdTest, cdOpen), cdStatus),
-    el('div', { class: 'section' }, el('h3', { text: '🔔 Avisos de solapes' }),
-      el('div', { class: 'muted', text: 'Al abrir la app (y cada hora con ella abierta) se revisa la programación y tus calendarios. Si un día de trabajo choca con una cita, aparece un aviso y se marca en rojo.' }),
+    el('div', { class: 'section' }, el('h3', { text: '🔔 Avisos' }),
+      el('div', { class: 'muted', text: 'Para no saturarte, solo avisa de esto (un aviso por cada cosa):' }),
+      el('label', { class: 'chk', style: { color: 'var(--text)' } }, nHigh, ' Tareas de prioridad alta'),
+      el('label', { class: 'chk', style: { color: 'var(--text)' } }, nFam, ' Eventos de Luna / Familia'),
+      el('div', { class: 'row2' }, field('Cuánto antes', nLead), el('span')),
+      el('div', { class: 'muted', text: 'Además: cambios en la programación y días de trabajo que chocan con algo.' }),
+      el('div', { class: 'muted', text: 'Importante: una web no puede despertarse sola. Los avisos llegan con la app abierta o en segundo plano; si el iPhone la ha cerrado, saltan al volver a abrirla (si el evento aún no ha empezado). Para Luna/Familia, lo más fiable con el móvil bloqueado son las alertas del propio Calendario de Apple.' }),
       'Notification' in window ? el('button', { type: 'button', class: 'btn small', text: Notification.permission === 'granted' ? '✓ Notificaciones activadas' : 'Activar notificaciones del sistema', disabled: Notification.permission === 'granted', onclick: async (e) => {
         const r = await Notification.requestPermission(); e.target.textContent = r === 'granted' ? '✓ Notificaciones activadas' : 'Permiso denegado (actívalo en Ajustes del sistema)';
-        if (r === 'granted') systemNotify('Planificador', 'Te avisaré aquí cuando el trabajo se solape con otra cosa.');
+        if (r === 'granted') systemNotify('Planificador', 'Listo: te avisaré de tareas importantes, de Luna/Familia y de cambios en el trabajo.');
       } }) : el('div', { class: 'muted', text: 'En iPhone, las notificaciones solo funcionan con la app añadida a la pantalla de inicio.' })),
     el('div', { class: 'section' }, el('h3', { text: '🔄 Google (Tasks + sincronización)' }),
       field('Client ID de OAuth (ver README)', clientId), clientErr, gState,
@@ -1504,7 +1566,8 @@ function settingsModal() {
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
-      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), vacShow: vacShow.checked, vacDrive: vacDrive.checked, caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
+      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), vacShow: vacShow.checked, vacDrive: vacDrive.checked,
+      notifyHigh: nHigh.checked, notifyFam: nFam.checked, notifyLead: +nLead.value || 15, caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00', maxTaskHours: Math.max(0, Math.min(16, parseFloat(String(maxH.value).replace(',', '.')) || 0)),
     });
@@ -1522,7 +1585,7 @@ function settingsModal() {
 
 const EXCEL_KEY = 'cfs.excelCheck';
 const lastExcelCheck = () => { try { return +localStorage.getItem(EXCEL_KEY) || 0; } catch { return 0; } };
-const excelMsg = (n, name) => `✓ ${n.work} días de trabajo, ${n.fest} festivos (${n.years.join(', ')})${n.cancelled ? ` · ${n.cancelled} cancelados (tachados) ignorados` : ''} — “${name}”, ${new Date().toLocaleString('es-ES')}.`;
+const excelMsg = (n, name) => `✓ ${n.work} días de trabajo, ${n.fest} festivos (${n.years.join(', ')})${n.cancelled ? ` · ${n.cancelled} cancelados (tachados) ignorados` : ''} — “${name}”, ${new Date().toLocaleString('es-ES')}.${n.changes === 0 ? ' Sin cambios respecto a la anterior.' : n.changes ? ` ${n.changes} cambio${n.changes > 1 ? 's' : ''} respecto a la anterior.` : ''}`;
 
 /** Descarga el Excel desde el enlace de iCloud Drive (vía proxy). Una vez al día salvo force. */
 const shareUrl = (proxy, link) => `${proxy.trim().replace(/[?&]$/, '')}${proxy.includes('?') ? '&' : '?'}share=${encodeURIComponent(link.trim())}`;
@@ -1610,8 +1673,36 @@ async function importExcel(buf, fileName, meta = {}) {
   const r = parseProgramacion(wb, { initials: s.initials, tripHours: [s.tripStart, s.tripEnd], dayHours: [s.dayWorkStart, s.dayWorkEnd] });
   if (!r.years.length) throw new Error('No encuentro ninguna hoja “Programación AAAA” en el archivo');
   const keep = state.work.events.filter((e) => !r.years.includes(+e.date.slice(0, 4)));
-  setWork({ events: [...keep, ...r.events], fileName, importedAt: Date.now(), fileModified: meta.fileModified || null });
-  return { work: r.events.filter((e) => e.kind === 'trabajo').length, fest: r.events.filter((e) => e.kind === 'festivo').length, years: r.years, cancelled: r.cancelled.length };
+  // ¿qué ha cambiado respecto a la programación anterior? (solo de hoy en adelante)
+  const hadBefore = state.work.events.some((e) => e.kind === 'trabajo');
+  const diff = hadBefore ? diffWork(state.work.events, r.events, r.years, toYMD(new Date())) : null;
+  const lastDiff = diff && diff.total ? { ...diff, at: Date.now(), fileName } : state.work.lastDiff || null;
+  setWork({ events: [...keep, ...r.events], fileName, importedAt: Date.now(), fileModified: meta.fileModified || null, lastDiff });
+  return { work: r.events.filter((e) => e.kind === 'trabajo').length, fest: r.events.filter((e) => e.kind === 'festivo').length, years: r.years, cancelled: r.cancelled.length, changes: diff ? diff.total : null };
+}
+
+// ---------- Aviso de cambios en la programación ----------
+const DIFF_SEEN = 'cfs.diffSeen', DIFF_NOTIFIED = 'cfs.diffNotified';
+function checkWorkDiff() {
+  const d = state.work.lastDiff;
+  if (!d || !d.total) return null;
+  // aviso del sistema una sola vez por cambio (también si llegó desde otro dispositivo)
+  if (+lsGet(DIFF_NOTIFIED) < d.at) { lsSet(DIFF_NOTIFIED, d.at); systemNotify('📄 La programación ha cambiado', `${diffSummary(d)}. Toca para ver los días.`, 'programacion'); }
+  return +lsGet(DIFF_SEEN) < d.at ? d : null;
+}
+function workDiffModal() {
+  const d = state.work.lastDiff;
+  if (!d) return;
+  lsSet(DIFF_SEEN, d.at);
+  const row = (x, cls, extra) => el('button', { type: 'button', class: `diff-row ${cls}`, onclick: () => { closeModal(); switchTab('week'); goTo(parseYMD(x.date)); } },
+    el('b', { class: 'dd', text: fmtDay(x.date) }), el('div', {}, extra ? el('div', { class: 'muted', text: extra }) : null, el('div', { text: x.text })));
+  openModal('📄 Cambios en la programación', [
+    el('div', { class: 'muted', text: `Comparada con la anterior (${new Date(d.at).toLocaleString('es-ES')}), de hoy en adelante: ${diffSummary(d)}.` }),
+    d.added.length ? el('div', { class: 'section' }, el('h3', { text: `➕ Días nuevos (${d.added.length})` }), d.added.map((x) => row(x, 'add'))) : null,
+    d.removed.length ? el('div', { class: 'section' }, el('h3', { text: `➖ Días quitados (${d.removed.length})` }), d.removed.map((x) => row(x, 'del'))) : null,
+    d.changed.length ? el('div', { class: 'section' }, el('h3', { text: `✏️ Días cambiados (${d.changed.length})` }), d.changed.map((x) => row(x, 'chg', 'Antes: ' + x.before))) : null,
+    el('div', { class: 'muted', text: 'Si alguno cae en un día libre o choca con algo, lo verás también en ⚠︎ Solapes.' }),
+  ], [el('button', { type: 'button', class: 'btn primary', text: 'Entendido', onclick: () => { closeModal(); render(); } })]);
 }
 
 // ---------- Google Tasks ----------

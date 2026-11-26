@@ -93,6 +93,7 @@ Haz lo mismo en cada dispositivo (pegar el Client ID y conectar). A partir de ah
 | Bloquear agenda (p. ej. llevar a Luna al cole) | **＋ Nuevo** → «🔒 Bloqueo de agenda» | Igual |
 | Cambiar de semana | ‹ › o ← → | ‹ › o deslizar a izquierda/derecha |
 | Buscar (citas, tareas, trabajo…) | 🔍 o tecla `/` | 🔍 |
+| Reorganizar solapes y días cargados | Botón 🪄 (semana u Hoy) | Igual |
 | Proyectos y tiempo dedicado | Pestaña **Proyectos** | Pestaña **Proyectos** |
 | Ver detalle (evento o tarea) | Clic | Un toque |
 | Mover tarea | Arrastrar, o detalle → **⇄ Mover** y clic en el hueco | Mantener pulsado y arrastrar, o detalle → **⇄ Mover** y tocar el hueco |

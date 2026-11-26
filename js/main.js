@@ -681,6 +681,7 @@ function renderToday() {
 function render() {
   renderNotice();
   updateConflicts();
+  updateSuggestBtns();
   updateExcelBtn();
   renderWeek();
   renderSide();
@@ -923,6 +924,116 @@ function findSlot(duration, excludeId) {
     if (cur + duration <= pe) return { date: ds, start: min2hm(cur) };
   }
   return null;
+}
+
+
+// ======================================================================
+// Sugerir huecos: mover tareas que se solapan o que sobrecargan un día
+// ======================================================================
+const SUG_DAYS = 21;
+const ovl = (a, b) => a[0] < b[1] && b[0] < a[1];
+/** Devuelve {list:[{task, from, to, reason}], stuck:[{task, reason}]} */
+function computeSuggestions() {
+  const now = new Date(), today = toYMD(now), nowMin = now.getHours() * 60 + now.getMinutes();
+  const from = new Date(now); from.setHours(0, 0, 0, 0);
+  const fe = calEvents(from, addDays(from, SUG_DAYS + 1));
+  const ps = hm2min(state.settings.planStart || '08:00'), pe = hm2min(state.settings.planEnd || '21:00');
+  const maxDay = Math.round((state.settings.maxTaskHours ?? 4) * 60);
+  const last = toYMD(addDays(from, SUG_DAYS));
+  const movable = (t) => isScheduled(t) && !t.done && !isBlock(t) && t.date >= today && t.date <= last && !(t.date === today && hm2min(t.start) < nowMin);
+  const moving = new Map();   // id -> {date, start}
+  const placed = {};          // date -> [[s,e]] de las propuestas
+  const out = [], stuck = [];
+  const dayCache = {};
+  const items = (ds) => (dayCache[ds] ||= itemsForDay(ds, fe).timed);
+  // ocupación de un día sin las tareas que se van a mover, más lo ya propuesto
+  const busyOf = (ds, exceptId) => [
+    ...items(ds).filter((it) => !(it.task && (it.task.id === exceptId || moving.has(it.task.id)))).map((it) => [it.s, it.e]),
+    ...(placed[ds] || []),
+  ].sort((a, b) => a[0] - b[0]);
+  const taskLoad = (ds) => items(ds).filter((it) => it.task && !isBlock(it.task) && !it.task.done && !moving.has(it.task.id)).reduce((a, it) => a + (it.e - it.s), 0) + (placed[ds] || []).filter((x) => x.task).reduce((a, x) => a + (x[1] - x[0]), 0);
+  function slotFor(t, firstDay, { checkLoad = false } = {}) {
+    const dur = t.duration || 60;
+    const lim = t.due && t.due < last ? t.due : last;
+    for (let d = parseYMD(firstDay); toYMD(d) <= lim; d = addDays(d, 1)) {
+      const ds = toYMD(d);
+      if (checkLoad && taskLoad(ds) + dur > maxDay) continue;
+      let cur = ds === today ? Math.max(ps, Math.ceil((nowMin + 5) / SNAP) * SNAP) : ps;
+      for (const [b0, b1] of busyOf(ds, t.id)) {
+        if (b0 - cur >= dur) break;
+        if (b1 > cur) cur = Math.ceil(b1 / SNAP) * SNAP;
+      }
+      if (cur + dur <= pe) return { date: ds, start: min2hm(cur) };
+    }
+    return null;
+  }
+  function propose(t, reason, opts) {
+    const to = slotFor(t, opts?.firstDay || t.date, opts);
+    if (!to) { stuck.push({ task: t, reason: reason + (t.due ? ' · sin hueco antes de su fecha límite' : ' · sin hueco libre en 3 semanas') }); return; }
+    moving.set(t.id, to);
+    const iv = [hm2min(to.start), hm2min(to.start) + (t.duration || 60)]; iv.task = true;
+    (placed[to.date] ||= []).push(iv);
+    out.push({ task: t, from: { date: t.date, start: t.start }, to, reason });
+  }
+  const tasks = liveTasks().filter(movable).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start) || PRIO_RANK[a.priority || ''] - PRIO_RANK[b.priority || '']);
+  // 1) solapes
+  for (const t of tasks) {
+    if (moving.has(t.id)) continue;
+    const iv = [hm2min(t.start), hm2min(t.start) + (t.duration || 60)];
+    const hit = items(t.date).find((it) => it.task?.id !== t.id && !(it.task && moving.has(it.task.id)) && ovl(iv, [it.s, it.e])
+      // entre dos tareas, se mueve la de menor prioridad (o la que va después)
+      && !(it.task && !isBlock(it.task) && (PRIO_RANK[it.task.priority || ''] > PRIO_RANK[t.priority || ''] || (PRIO_RANK[it.task.priority || ''] === PRIO_RANK[t.priority || ''] && hm2min(it.task.start) > iv[0]))));
+    if (!hit) continue;
+    const what = hit.task ? (isBlock(hit.task) ? 'el bloqueo' : isProj(hit.task) ? 'el bloque' : 'la tarea') : hit.type === 'trabajo' ? 'el trabajo' : 'la cita';
+    propose(t, `choca con ${what} «${hit.title}»`);
+  }
+  // 2) días sobrecargados
+  if (maxDay > 0) for (let d = new Date(from); toYMD(d) <= last; d = addDays(d, 1)) {
+    const ds = toYMD(d);
+    let load = taskLoad(ds);
+    if (load <= maxDay) continue;
+    const cands = tasks.filter((t) => t.date === ds && !moving.has(t.id))
+      .sort((a, b) => PRIO_RANK[b.priority || ''] - PRIO_RANK[a.priority || ''] || hm2min(b.start) - hm2min(a.start));
+    for (const t of cands) {
+      if (load <= maxDay) break;
+      if (t.priority === 'alta') continue; // lo importante se queda
+      const before = load;
+      propose(t, `día con ${fmtDur(before)} de tareas (máx. ${fmtDur(maxDay)})`, { firstDay: toYMD(addDays(d, 1)), checkLoad: true });
+      if (moving.has(t.id)) load -= t.duration || 60;
+    }
+  }
+  return { list: out, stuck };
+}
+
+let lastSug = { list: [], stuck: [] };
+function updateSuggestBtns() {
+  lastSug = computeSuggestions();
+  const n = lastSug.list.length;
+  for (const b of document.querySelectorAll('.sug-btn')) { b.hidden = !n && !lastSug.stuck.length; b.querySelector('.n').textContent = n || '!'; }
+}
+
+function suggestModal() {
+  const { list, stuck } = computeSuggestions();
+  if (!list.length && !stuck.length) return openModal('Sugerencias', [el('div', { text: '✓ No hay solapes ni días sobrecargados en las próximas 3 semanas.' })], [el('button', { type: 'button', class: 'btn primary', text: 'Cerrar', onclick: closeModal })]);
+  const rows = list.map((sg) => { const cb = el('input', { type: 'checkbox' }); cb.checked = true; return { sg, cb }; });
+  const nm = (t) => (isProj(t) ? '◆ ' + projName(t) + (t.title ? ' · ' + t.title : '') : t.title);
+  openModal(`🪄 Sugerencias (${list.length})`, [
+    el('div', { class: 'muted', text: `Te propongo mover estas ${list.length === 1 ? 'tarea' : 'tareas'} al hueco libre más cercano (sin pasar su fecha límite). Desmarca las que prefieras dejar.` }),
+    el('div', { class: 'glist sug-list' }, rows.map(({ sg, cb }) => el('label', { class: 'sug-row' }, cb, el('div', {},
+      el('b', { text: nm(sg.task) }),
+      el('div', { class: 'sug-move' }, el('span', { class: 'old', text: `${fmtDay(sg.from.date)} ${sg.from.start}` }), ' → ', el('span', { class: 'new', text: `${fmtDay(sg.to.date)} ${sg.to.start}` })),
+      el('div', { class: 'muted', text: sg.reason }))))),
+    stuck.length ? el('div', { class: 'section' }, el('h3', { text: 'Sin hueco' }), stuck.map((x) => el('div', { class: 'err', text: `${nm(x.task)} (${fmtDay(x.task.date)} ${x.task.start}): ${x.reason}` }))) : null,
+    el('div', { class: 'muted', text: `Límite: ${fmtDur(Math.round((state.settings.maxTaskHours ?? 4) * 60))} de tareas al día y horario ${state.settings.planStart || '08:00'}–${state.settings.planEnd || '21:00'} (Ajustes → Horario).` }),
+  ], [
+    el('button', { type: 'button', class: 'btn', text: 'Cancelar', onclick: closeModal }),
+    list.length ? el('button', { type: 'submit', class: 'btn primary', text: 'Aplicar' }) : null,
+  ], () => {
+    const sel = rows.filter((r) => r.cb.checked);
+    for (const { sg } of sel) upsertTask({ id: sg.task.id, date: sg.to.date, start: sg.to.start });
+    closeModal();
+    toast(sel.length ? `✓ ${sel.length} ${sel.length === 1 ? 'tarea movida' : 'tareas movidas'}` : 'Sin cambios');
+  });
 }
 
 // ======================================================================
@@ -1320,6 +1431,7 @@ function settingsModal() {
 
   const hStart = el('input', { type: 'number', min: 0, max: 12, value: s.dayStart, style: { width: '70px' } });
   const hEnd = el('input', { type: 'number', min: 13, max: 24, value: s.dayEnd, style: { width: '70px' } });
+  const maxH = el('input', { type: 'number', min: 0, max: 16, step: 0.5, value: s.maxTaskHours ?? 4, style: { width: '80px' } });
   const pS = el('input', { type: 'time', value: s.planStart || '08:00' }), pE = el('input', { type: 'time', value: s.planEnd || '21:00' });
 
   const importJson = el('input', { type: 'file', accept: 'application/json,.json', style: { display: 'none' } });
@@ -1373,7 +1485,8 @@ function settingsModal() {
         G.isSignedIn() ? el('button', { type: 'button', class: 'btn small', text: 'Desconectar', onclick: () => { G.signOut(); gState.textContent = 'Desconectado.'; setSync('off'); } }) : null)),
     el('div', { class: 'section' }, el('h3', { text: '🕘 Horario' }),
       el('div', { class: 'row2' }, field('Calendario visible desde (h)', hStart), field('hasta (h)', hEnd)),
-      el('div', { class: 'row2' }, field('Autoprogramar tareas desde', pS), field('hasta', pE))),
+      el('div', { class: 'row2' }, field('Autoprogramar tareas desde', pS), field('hasta', pE)),
+      el('div', { class: 'row2' }, field('Máximo de horas de tareas al día (para las sugerencias)', maxH), el('span'))),
     el('div', { class: 'section' }, el('h3', { text: '💾 Copia de seguridad' }),
       el('div', { class: 'seg' },
         el('button', { type: 'button', class: 'btn small', text: 'Exportar JSON', onclick: () => { const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(exportable(), null, 1)], { type: 'application/json' })), download: `planificador-${toYMD(new Date())}.json` }); a.click(); } }),
@@ -1393,7 +1506,7 @@ function settingsModal() {
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
       proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), vacShow: vacShow.checked, vacDrive: vacDrive.checked, caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
-      planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
+      planStart: pS.value || '08:00', planEnd: pE.value || '21:00', maxTaskHours: Math.max(0, Math.min(16, parseFloat(String(maxH.value).replace(',', '.')) || 0)),
     });
     closeModal();
     clearFeedCache();
@@ -1700,6 +1813,7 @@ for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev
   for (const ev of ['gesturestart', 'gesturechange']) sc.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
 }
 $('#search-btn').onclick = searchModal;
+document.querySelectorAll('.sug-btn').forEach((b) => { b.onclick = suggestModal; });
 $('#proj-add').onclick = () => projectModal(null);
 document.querySelectorAll('#period-seg button').forEach((b) => { b.onclick = () => { period = b.dataset.p; periodAnchor = null; renderProjects(); }; });
 const shiftPeriod = (n) => { const a = periodAnchor ? new Date(periodAnchor) : new Date(); if (period === 'week') a.setDate(a.getDate() + 7 * n); else if (period === 'month') a.setMonth(a.getMonth() + n, 1); else a.setFullYear(a.getFullYear() + n); periodAnchor = a; renderProjects(); };

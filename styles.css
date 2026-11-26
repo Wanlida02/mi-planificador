@@ -242,6 +242,12 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .ag-empty { color: var(--muted); padding: 10px 4px; }
 .ag-warn { color: var(--danger); font-size: 12px; }
 
+.sug-btn { min-height: 34px; padding: 0 10px; font-weight: 600; background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.sug-btn .n { font-size: 12px; background: var(--accent); color: var(--accent-ink); border-radius: 9px; padding: 0 6px; }
+.sug-row { align-items: flex-start; }
+.sug-move { font-size: 13px; margin: 2px 0; }
+.sug-move .old { text-decoration: line-through; color: var(--muted); }
+.sug-move .new { font-weight: 600; }
 /* ---------- Proyectos ---------- */
 .proj-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
 .period-nav { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }

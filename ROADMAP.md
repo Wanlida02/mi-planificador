@@ -15,7 +15,7 @@
 - [ ] **Avisos de tareas**: notificación antes de cada tarea programada
 - [ ] **Resumen semanal**: definir qué métricas (horas de trabajo/viaje, tareas, vencimientos…)
 - [ ] **Plantillas de viaje**: tareas automáticas alrededor de cada viaje del Excel
-- [ ] **Sugerir huecos**: proponer mover tareas a espacios libres cuando haya solapes o demasiadas tareas en un día
+- [x] **Sugerir huecos** (🪄): mueve tareas que se solapan o que sobrecargan un día (máx. de horas configurable) al hueco libre más cercano, respetando fechas límite
 - [x] **Proyectos**: objetivo semanal, bloques (repetibles cada semana), tareas asignadas a un proyecto y «Completar objetivo» con huecos libres
 - [x] **Informes de tiempo** por proyecto: semana, mes y año (hecho / planificado) y últimas 8 semanas
 - [x] **Calendario de vacaciones**: el artefacto lo guarda en Google Drive y el planificador lo lee solo (también importación manual JSON/.ics); avisa si te programan trabajo en vacaciones, asuntos propios, festivos o días libres SENASA

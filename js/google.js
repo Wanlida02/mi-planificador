@@ -2,7 +2,9 @@
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.appdata',
   'https://www.googleapis.com/auth/tasks',
+  'https://www.googleapis.com/auth/drive.readonly', // solo para leer el archivo de vacaciones que guarda el artefacto
 ].join(' ');
+const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 const FILE_NAME = 'calendario-fs-data.json';
 
 let tokenClient = null;
@@ -21,7 +23,9 @@ function loadGis() {
   });
 }
 
-export function isSignedIn() { return !!token && token.expires_at > Date.now() + 60000; }
+// un token concedido antes de añadir el permiso de lectura cuenta como «sin conectar» para pedirlo una vez
+const hasAllScopes = () => !!token && (token.scope === undefined ? false : token.scope.includes(READ_SCOPE));
+export function isSignedIn() { return !!token && token.expires_at > Date.now() + 60000 && hasAllScopes(); }
 export function hasEverSignedIn() { try { return localStorage.getItem('cfs.google') === '1'; } catch { return false; } }
 
 export async function signIn(clientId, { silent = false } = {}) {
@@ -33,7 +37,7 @@ export async function signIn(clientId, { silent = false } = {}) {
       callback: (r) => {
         if (r.error) { pending?.rej(new Error(r.error_description || r.error)); }
         else {
-          token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 30) * 1000 };
+          token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 30) * 1000, scope: r.scope || '' };
           keepToken();
           try { localStorage.setItem('cfs.google', '1'); } catch {}
           pending?.res(token);
@@ -46,7 +50,8 @@ export async function signIn(clientId, { silent = false } = {}) {
   }
   return new Promise((res, rej) => {
     pending = { res, rej };
-    tokenClient.requestAccessToken({ prompt: silent ? '' : (hasEverSignedIn() ? '' : 'consent') });
+    const needConsent = !hasEverSignedIn() || (token && !hasAllScopes());
+    tokenClient.requestAccessToken({ prompt: silent ? '' : (needConsent ? 'consent' : '') });
   });
 }
 
@@ -121,4 +126,19 @@ export async function setTaskCompleted(listId, taskId, done) {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(done ? { status: 'completed' } : { status: 'needsAction', completed: null }),
   });
+}
+
+// ---------- Archivo de vacaciones que guarda el artefacto en Drive ----------
+export const VAC_FILE = 'vacaciones-planificador.json';
+/** Devuelve {id, modifiedTime, text} del archivo más reciente, o null. Solo descarga si es más nuevo que `since`. */
+export async function latestVacationFile(since) {
+  const q = encodeURIComponent(`name='${VAC_FILE}' and trashed=false`);
+  const r = await api(`https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=modifiedTime%20desc&pageSize=1&fields=files(id,modifiedTime)`);
+  const f = r.files?.[0];
+  if (!f) return null;
+  if (since && f.modifiedTime <= since) return { id: f.id, modifiedTime: f.modifiedTime, unchanged: true };
+  if (!isSignedIn()) await signIn(clientIdRef, { silent: true });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`, { headers: { Authorization: `Bearer ${token.access_token}` } });
+  if (!res.ok) throw new Error(`No se pudo leer ${VAC_FILE} de Drive (${res.status})`);
+  return { id: f.id, modifiedTime: f.modifiedTime, text: await res.text() };
 }

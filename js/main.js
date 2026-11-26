@@ -1267,7 +1267,7 @@ function settingsModal() {
 
   // vacaciones
   const vacStatus = el('div', { class: 'muted' });
-  const vacMsg = () => { const v = vacSummary(state.vac); vacStatus.textContent = state.vac.importedAt ? `✓ ${v.v} días de vacaciones, ${v.a} de asuntos propios y ${v.h} festivos/días libres — importado ${new Date(state.vac.importedAt).toLocaleString('es-ES')}.` : 'Aún no has importado tu calendario de vacaciones.'; };
+  const vacMsg = () => { const v = vacSummary(state.vac); vacStatus.textContent = state.vac.importedAt ? `✓ ${v.v} días de vacaciones, ${v.a} de asuntos propios y ${v.h} festivos/días libres — ${state.vac.fileName === 'Google Drive' ? 'leído de Drive' : 'importado'} ${new Date(state.vac.importedAt).toLocaleString('es-ES')}.` : 'Aún no has importado tu calendario de vacaciones.'; };
   vacMsg();
   const doVac = (text, name) => {
     try { const r = parseVacations(text); setVac({ ...r, fileName: name }); vacMsg(); const n = conflicts.filter((c) => c.kind === 'vacaciones').length; toast(n ? `⚠︎ ${n} día${n > 1 ? 's' : ''} de trabajo caen en días libres` : '✓ Vacaciones importadas: ningún día de trabajo cae en un día libre', 6000); }
@@ -1278,6 +1278,17 @@ function settingsModal() {
   const vacPaste = el('textarea', { placeholder: 'O pega aquí lo que copia «📤 Exportar al planificador»', style: { minHeight: '60px' } });
   const vacPasteBtn = el('button', { type: 'button', class: 'btn small', text: 'Importar lo pegado', onclick: () => { if (vacPaste.value.trim()) { doVac(vacPaste.value, 'texto pegado'); vacPaste.value = ''; } } });
   const vacShow = el('input', { type: 'checkbox' }); vacShow.checked = s.vacShow !== false;
+  const vacDrive = el('input', { type: 'checkbox' }); vacDrive.checked = s.vacDrive !== false;
+  const vacDriveBtn = el('button', { type: 'button', class: 'btn small', text: '↻ Leer ahora de Drive', onclick: async () => {
+    vacStatus.textContent = 'Buscando en Drive…';
+    try {
+      if (!G.isSignedIn()) await G.signIn(getClientId());
+      updateSettings({ vacDrive: true }); vacDrive.checked = true;
+      const prev = state.vac.sourceModified; state.vac.sourceModified = '';
+      const ok = await syncVacationsFromDrive();
+      if (!ok) { state.vac.sourceModified = prev; vacStatus.textContent = `No encuentro «${G.VAC_FILE}» en tu Drive. En el artefacto de vacaciones activa «Guardar en Drive».`; } else vacMsg();
+    } catch (e) { vacStatus.textContent = '⚠︎ ' + e.message; }
+  } });
   const cdToken = el('input', { value: s.caldavToken || '', placeholder: 'código privado (el mismo que PLANNER_TOKEN en Cloudflare)', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
   const cdStatus = el('div', { class: 'muted', text: s.caldavToken ? 'Configurado. Pulsa «Probar conexión» para comprobarlo.' : 'Sin configurar: los eventos de iCloud solo se pueden ver.' });
   const cdGen = el('button', { type: 'button', class: 'btn small', text: '🎲 Generar código', onclick: () => {
@@ -1334,8 +1345,10 @@ function settingsModal() {
       el('div', { class: 'row2' }, field('Viaje: desde', tS), field('Viaje: hasta', tE)),
       el('div', { class: 'row2' }, field('Día suelto: desde', dS), field('Día suelto: hasta', dE))),
     el('div', { class: 'section' }, el('h3', { text: '🏖️ Vacaciones y días libres' }),
-      el('div', { class: 'muted' }, 'En tu artefacto ', el('a', { href: 'https://claude.ai/artifact/DbUR5ckATSEYribZjHM5L8', target: '_blank', rel: 'noopener', text: '«Calendario de vacaciones»' }), ' pulsa «📤 Exportar al planificador» y elige aquí el archivo (o pega el texto). Solo se cruza con el trabajo: te avisa si te ponen a trabajar en un día libre.'),
-      vacFile, el('div', { class: 'seg' }, vacPaste), vacPasteBtn, vacStatus,
+      el('div', { class: 'muted' }, 'Tu artefacto ', el('a', { href: 'https://claude.ai/artifact/DbUR5ckATSEYribZjHM5L8', target: '_blank', rel: 'noopener', text: '«Calendario de vacaciones»' }), ' guarda tus días en tu Google Drive y aquí se leen solos al sincronizar con Google. Solo se cruza con el trabajo: te avisa si te ponen a trabajar en un día libre.'),
+      el('label', { class: 'chk', style: { color: 'var(--text)' } }, vacDrive, ' Leer automáticamente de mi Google Drive (lo guarda el artefacto)'), vacDriveBtn,
+      el('details', {}, el('summary', { class: 'muted', text: 'O importarlo a mano (archivo o texto pegado)' }), vacFile, el('div', { class: 'seg' }, vacPaste), vacPasteBtn),
+      vacStatus,
       el('label', { class: 'chk', style: { color: 'var(--text)' } }, vacShow, ' Mostrar vacaciones y festivos en el calendario')),
     el('div', { class: 'section' }, el('h3', { text: '📅 Calendarios de iCloud' }),
       el('div', { class: 'muted' }, 'En el iPhone: Calendario → Calendarios → (i) junto a “Familia” → activa “Calendario público” → Compartir enlace. Repite con “Calendar”. Pega aquí los enlaces.'),
@@ -1356,7 +1369,7 @@ function settingsModal() {
       el('label', { class: 'chk', style: { color: 'var(--text)' } }, gtAuto, ' Traer automáticamente mis tareas de Google Tasks (las que tienen fecha salen ese día, arriba)'),
       el('div', { class: 'muted', text: 'Google Tasks no comparte la hora de las tareas (solo el día): ponle la hora aquí tocándola → «Elegir hueco».' }),
       el('div', { class: 'seg' },
-        el('button', { type: 'button', class: 'btn small', text: G.isSignedIn() ? 'Volver a conectar' : 'Conectar con Google', onclick: async () => { saveClient(); try { await G.signIn(getClientId()); gState.textContent = '✓ Conectado.'; syncNow(true); } catch (e) { gState.textContent = '⚠︎ ' + e.message; } } }),
+        el('button', { type: 'button', class: 'btn small', text: G.isSignedIn() ? 'Volver a conectar' : 'Conectar con Google', onclick: async () => { saveClient(); try { await G.signIn(getClientId()); gState.textContent = '✓ Conectado.'; await syncNow(true); vacMsg(); } catch (e) { gState.textContent = '⚠︎ ' + e.message; } } }),
         G.isSignedIn() ? el('button', { type: 'button', class: 'btn small', text: 'Desconectar', onclick: () => { G.signOut(); gState.textContent = 'Desconectado.'; setSync('off'); } }) : null)),
     el('div', { class: 'section' }, el('h3', { text: '🕘 Horario' }),
       el('div', { class: 'row2' }, field('Calendario visible desde (h)', hStart), field('hasta (h)', hEnd)),
@@ -1378,7 +1391,7 @@ function settingsModal() {
     updateSettings({
       initials: initials.value.trim().toUpperCase() || 'FS', tripStart: tS.value, tripEnd: tE.value, dayWorkStart: dS.value, dayWorkEnd: dE.value,
       feeds: feeds.filter((f) => f.url.trim()).map((f) => ({ ...f, url: f.url.trim(), name: f.name.trim() || 'Calendario' })),
-      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), vacShow: vacShow.checked, caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
+      proxy: proxy.value.trim(), excelLink: excelLink.value.trim(), vacShow: vacShow.checked, vacDrive: vacDrive.checked, caldavToken: cdToken.value.trim(), gtasksAuto: gtAuto.checked, reminderDays: Math.max(1, +reminder.value || 7),
       dayStart: Math.max(0, Math.min(12, +hStart.value || 6)), dayEnd: Math.max(13, Math.min(24, +hEnd.value || 23)),
       planStart: pS.value || '08:00', planEnd: pE.value || '21:00',
     });
@@ -1569,6 +1582,19 @@ async function syncGoogleTasks() {
   return added;
 }
 
+/** Lee de Drive el archivo que guarda el artefacto de vacaciones y lo importa si es nuevo. */
+async function syncVacationsFromDrive() {
+  if (state.settings.vacDrive === false || !G.isSignedIn()) return false;
+  const r = await G.latestVacationFile(state.vac.sourceModified);
+  if (!r || r.unchanged) return false;
+  const v = parseVacations(r.text);
+  const before = conflicts.filter((c) => c.kind === 'vacaciones').length;
+  setVac({ ...v, fileName: 'Google Drive', sourceModified: r.modifiedTime });
+  const n = conflicts.filter((c) => c.kind === 'vacaciones').length;
+  toast(`🏖️ Vacaciones actualizadas desde Drive${n ? ` · ⚠︎ ${n} día${n > 1 ? 's' : ''} de trabajo en días libres` : ''}`, 5000);
+  return true;
+}
+
 async function syncNow(interactive = false) {
   if (syncing) return;
   if (!getClientId()) { if (interactive) settingsModal(); return; }
@@ -1579,6 +1605,7 @@ async function syncNow(interactive = false) {
     if (mergeRemote(remote)) render();
     await G.driveSave(exportable());
     const n = await syncGoogleTasks().catch((e) => { toast('Google Tasks: ' + e.message, 5000); return 0; });
+    await syncVacationsFromDrive().catch((e) => toast('Vacaciones (Drive): ' + e.message, 5000));
     if (n) toast(`📥 ${n} tarea${n > 1 ? 's' : ''} nueva${n > 1 ? 's' : ''} de Google Tasks`, 4000);
     setSync('ok', 'Sincronizado ' + new Date().toLocaleTimeString('es-ES'));
   } catch (e) { setSync('err', e.message); if (interactive) toast('Sincronización: ' + e.message, 5000); }

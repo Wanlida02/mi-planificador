@@ -18,5 +18,5 @@
 - [ ] **Sugerir huecos**: proponer mover tareas a espacios libres cuando haya solapes o demasiadas tareas en un día
 - [x] **Proyectos**: objetivo semanal, bloques (repetibles cada semana), tareas asignadas a un proyecto y «Completar objetivo» con huecos libres
 - [x] **Informes de tiempo** por proyecto: semana, mes y año (hecho / planificado) y últimas 8 semanas
-- [x] **Calendario de vacaciones**: importación desde el artefacto (JSON o .ics); avisa si te programan trabajo en vacaciones, asuntos propios, festivos o días libres SENASA
+- [x] **Calendario de vacaciones**: el artefacto lo guarda en Google Drive y el planificador lo lee solo (también importación manual JSON/.ics); avisa si te programan trabajo en vacaciones, asuntos propios, festivos o días libres SENASA
 - [x] **Buscador**: citas de iCloud, tareas, bloqueos, proyectos y días de trabajo (sin distinguir tildes)

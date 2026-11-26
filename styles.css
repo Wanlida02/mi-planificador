@@ -402,7 +402,10 @@ body.tab-backlog #range-label, body.tab-today #range-label { visibility: hidden;
   dialog.sheet .m-head::before { content: ""; position: absolute; left: 50%; top: 6px; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: var(--line); }
   .cal.compact button.chip { font-size: 9.5px; padding: 0 2px; }
   .tray { padding-bottom: var(--sb); }
-  .kanban, .agenda { padding-bottom: calc(16px + var(--sb)); }
+  /* las listas desplazables terminan por encima del indicador de inicio (un toque ahí cierra la app) */
+  #view-today, #view-backlog, #view-projects { padding-bottom: var(--sb); }
+  .kanban, .agenda { padding-bottom: 16px; }
+  .proj-wrap { padding-bottom: 24px !important; }
   /* bandeja más baja: tarjetas compactas */
   .tray-head { padding: 6px 12px; }
   .tray-hint { display: none; }
